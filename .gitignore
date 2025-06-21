@@ -1,9 +1,9 @@
-# Node.js dependencies
+# Node.js dependencies (for root or sub-projects like backend/ or Final UI/)
 node_modules/
 
-# Next.js build output
+# Next.js build output (for Final UI/ and potentially ++Final UI/ if it were tracked)
 .next/
-out/ # If you use static HTML export
+out/ # If Next.js uses static HTML export
 
 # Environment variables (ALWAYS ignore these in Git)
 .env
@@ -35,18 +35,22 @@ Thumbs.db
 # TypeScript cache
 *.tsbuildinfo
 
-# Production build directory for other potential sub-projects (e.g., if you have a separate backend)
-# If your backend compiles to a 'dist' or 'build' folder within culturefix/backend, for example:
-# backend/dist/
-# backend/build/
+# Directories to EXCLUDE based on your project structure clarification
+# These are the folders you explicitly stated should NOT be pushed to GitHub:
+++Final UI/
+test-final-ui/
 
-# You might have a specific node_modules inside your Final UI project, which will also be ignored by the top-level node_modules/ entry.
-# If Final UI is a sub-project that also generates its own top-level build output (e.g., if you built directly in Final UI), you can do:
-Final UI/.next/
-Final UI/out/
-Final UI/node_modules/ # If node_modules is specific to Final UI and not at the root
-# Accidental command file
+# Build directories for other potential sub-projects (e.g., if you have a separate backend build output)
+# If your backend compiles to a 'dist' or 'build' folder, add them here relative to culturefix/:
+backend/dist/
+backend/build/
+
+# Uploads directory (e.g., for resumes)
+backend/uploads/
+
+# Accidental command file, if it was created again
 udo -u postgres psql
-# Exclude other UI/test folders
+# Directories to EXCLUDE based on your project structure clarification
+# These are the folders you explicitly stated should NOT be pushed to GitHub:
 ++Final UI/
 test-final-ui/
