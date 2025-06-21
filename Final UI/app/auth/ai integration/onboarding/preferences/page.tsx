@@ -1,24 +1,61 @@
-"use client"
+"use client";
 
-import type React from "react"
+import type React from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { useState, useEffect, Suspense } from "react";
+import { XIcon, CheckIcon, DollarSignIcon, BriefcaseIcon, MapPinIcon, BuildingIcon, UsersIcon, UserIcon, TargetIcon, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { OnboardingStepper } from "@/components/onboarding-stepper";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useForm, Controller, SubmitHandler } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
+import { updateUserPreferences } from "@/lib/api";
 
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { cn } from "@/lib/utils"
-import { useState } from "react"
-import { XIcon, CheckIcon, DollarSignIcon, BriefcaseIcon, MapPinIcon, BuildingIcon, UsersIcon, UserIcon, TargetIcon } from "lucide-react"
-import Link from "next/link"
-import { OnboardingStepper } from "@/components/onboarding-stepper"
-import { useSearchParams } from "next/navigation"
+// --- Zod Schema Definitions ---
+const individualPreferencesSchema = z.object({
+  job_status: z.string().optional(),
+  desired_roles: z.array(z.string()).optional().default([]),
+  work_arrangement: z.string().optional(),
+  experience_level_preference: z.string().optional(), // Matches DB: experience_level_preference
+  salary_expectation_min: z.preprocess(val => val ? parseInt(String(val), 10) : undefined, z.number().positive().optional()),
+  salary_expectation_max: z.preprocess(val => val ? parseInt(String(val), 10) : undefined, z.number().positive().optional()),
+  salary_expectation_currency: z.string().optional().default("usd"),
+  career_goals: z.array(z.string()).optional().default([]),
+  preferred_locations: z.array(z.string()).optional().default([]), // Matches DB: preferred_locations
+});
+
+const companyPreferencesSchema = z.object({
+  hiring_status: z.string().optional(),
+  // employmentType from UI, maps to offered_employment_types (array) in DB
+  // For now, let's assume UI sends a single string for employmentType.
+  // Backend /api/users/preferences already handles converting single employmentType to array [employmentType]
+  employmentType: z.string().optional(), // This will be mapped to offered_employment_types in backend
+  hiring_roles: z.array(z.string()).optional().default([]), // Matches DB: hiring_roles
+  hiring_locations: z.array(z.string()).optional().default([]), // Matches DB: hiring_locations
+  hiring_salary_min: z.preprocess(val => val ? parseInt(String(val), 10) : undefined, z.number().positive().optional()),
+  hiring_salary_max: z.preprocess(val => val ? parseInt(String(val), 10) : undefined, z.number().positive().optional()),
+  hiring_salary_currency: z.string().optional().default("usd"),
+});
+
+// Union type for form values
+type IndividualPreferencesFormValues = z.infer<typeof individualPreferencesSchema>;
+type CompanyPreferencesFormValues = z.infer<typeof companyPreferencesSchema>;
+type PreferencesFormValues = IndividualPreferencesFormValues | CompanyPreferencesFormValues;
+
 
 interface ToggleButtonProps {
-  value: string
-  selectedValue: string
-  onSelect: (value: string) => void
-  children: React.ReactNode
-  className?: string
+  value: string;
+  selectedValue: string | undefined; // Can be undefined if not selected
+  onSelect: (value: string) => void;
+  children: React.ReactNode;
+  className?: string;
 }
 
 const ToggleButton: React.FC<ToggleButtonProps> = ({ value, selectedValue, onSelect, children, className }) => (
@@ -26,7 +63,7 @@ const ToggleButton: React.FC<ToggleButtonProps> = ({ value, selectedValue, onSel
     type="button"
     onClick={() => onSelect(value)}
     className={cn(
-      "px-4 py-3 text-sm font-medium rounded-lg border transition-all duration-200",
+      "px-3 py-2 sm:px-4 sm:py-3 text-xs sm:text-sm font-medium rounded-lg border transition-all duration-200",
       selectedValue === value
         ? "bg-black text-white border-black shadow-md"
         : "bg-white text-brand-text-dark border-brand-border hover:border-gray-400 hover:shadow-sm",
@@ -35,606 +72,381 @@ const ToggleButton: React.FC<ToggleButtonProps> = ({ value, selectedValue, onSel
   >
     {children}
   </button>
-)
+);
 
-export default function PreferencesPage() {
-  const searchParams = useSearchParams()
-  const userType = searchParams.get('type') || 'company'
+// Component for multi-select with chips (e.g., for roles, locations, career goals)
+interface MultiSelectChipProps {
+  availableOptions: { value: string; label: string }[];
+  selectedOptions: string[];
+  onChange: (newSelectedOptions: string[]) => void;
+  placeholder: string;
+  label: string;
+  Icon?: React.ElementType;
+}
+
+const MultiSelectChip: React.FC<MultiSelectChipProps> = ({ availableOptions, selectedOptions, onChange, placeholder, label, Icon }) => {
+  const handleSelect = (value: string) => {
+    const newSelection = selectedOptions.includes(value)
+      ? selectedOptions.filter(item => item !== value)
+      : [...selectedOptions, value];
+    onChange(newSelection);
+  };
+
+  return (
+    <div className="space-y-3">
+      {Icon && <div className="flex items-center space-x-2 mb-1"> <Icon className="h-5 w-5 text-black" /> <Label className="text-base font-semibold text-brand-text-dark">{label}</Label> </div>}
+      {!Icon && <Label className="block text-base font-semibold text-brand-text-dark">{label}</Label>}
+
+      <div className="flex flex-wrap gap-2 mb-2 min-h-[2.5rem]"> {/* Ensure some min height for chips */}
+        {selectedOptions.map((optionValue) => {
+          const optionLabel = availableOptions.find(opt => opt.value === optionValue)?.label || optionValue;
+          return (
+            <span
+              key={optionValue}
+              className="inline-flex items-center bg-black text-white text-xs sm:text-sm font-medium px-3 py-1.5 rounded-full"
+            >
+              {optionLabel}
+              <button
+                type="button"
+                onClick={() => handleSelect(optionValue)}
+                className="ml-1.5 text-white hover:bg-gray-700 rounded-full p-0.5 transition-colors"
+              >
+                <XIcon className="h-3 w-3" />
+              </button>
+            </span>
+          );
+        })}
+      </div>
+      <Select
+        onValueChange={(value) => {
+          if (value && !selectedOptions.includes(value)) { // Check if value is not empty and not already selected
+            handleSelect(value);
+          }
+        }}
+        // value="" // Important: Reset select after an item is chosen to allow re-selection if needed or prevent it looking like an item is "stuck" selected
+      >
+        <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-11 sm:h-12">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {availableOptions.map(option => (
+            <SelectItem key={option.value} value={option.value} disabled={selectedOptions.includes(option.value)}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+};
+
+
+function PreferencesPageContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const { user, token, refetchUser, isLoading: isAuthLoading } = useAuth();
+
+  const pageUserType = user?.user_type || searchParams.get('type') as 'individual' | 'company' || 'individual';
+  const currentSchema = pageUserType === 'company' ? companyPreferencesSchema : individualPreferencesSchema;
+
+  const { control, register, handleSubmit, formState: { errors, isSubmitting }, reset, watch, setValue } = useForm<PreferencesFormValues>({
+    resolver: zodResolver(currentSchema),
+    defaultValues: pageUserType === 'individual'
+    ? {
+        job_status: "actively-looking",
+        desired_roles: [],
+        work_arrangement: "hybrid",
+        experience_level_preference: "mid-level",
+        salary_expectation_currency: "usd",
+        career_goals: [],
+        preferred_locations: []
+      }
+    : {
+        hiring_status: "actively-hiring",
+        employmentType: "full-time",
+        hiring_roles: [],
+        hiring_locations: [],
+        hiring_salary_currency: "usd"
+      },
+  });
+
+  // Populate form with user data from context's profile
+  useEffect(() => {
+    if (user?.profile) {
+      const profile = user.profile;
+      let defaultsToSet: Partial<PreferencesFormValues> = {};
+
+      if (pageUserType === 'individual') {
+        defaultsToSet = {
+          job_status: profile.job_status || "actively-looking",
+          desired_roles: profile.desired_roles || [],
+          work_arrangement: profile.work_arrangement || "hybrid",
+          experience_level_preference: profile.experience_level_preference || "mid-level",
+          salary_expectation_min: profile.salary_expectation_min || undefined,
+          salary_expectation_max: profile.salary_expectation_max || undefined,
+          salary_expectation_currency: profile.salary_expectation_currency || "usd",
+          career_goals: profile.career_goals || [],
+          preferred_locations: profile.preferred_locations || [],
+        };
+      } else if (pageUserType === 'company') {
+        defaultsToSet = {
+          hiring_status: profile.hiring_status || "actively-hiring",
+          // Backend stores offered_employment_types as array. UI uses 'employmentType' as single string.
+          // The PUT /api/users/preferences endpoint expects 'employmentType' (single string) from client for company.
+          employmentType: (profile.offered_employment_types && profile.offered_employment_types.length > 0) ? profile.offered_employment_types[0] : "full-time",
+          hiring_roles: profile.hiring_roles || [],
+          hiring_locations: profile.hiring_locations || [],
+          hiring_salary_min: profile.hiring_salary_min || undefined,
+          hiring_salary_max: profile.hiring_salary_max || undefined,
+          hiring_salary_currency: profile.hiring_salary_currency || "usd",
+        };
+      }
+      reset(defaultsToSet);
+    }
+  }, [user, pageUserType, reset]);
+
+
+  const onSubmit: SubmitHandler<PreferencesFormValues> = async (data) => {
+    if (!token) {
+      toast.error("Authentication token not found. Please log in again.");
+      return;
+    }
+
+    // The backend /api/users/preferences expects fields named like jobStatus, desiredRoles, etc.
+    // And for company, it expects employmentType (single string), roles, companyLocations etc.
+    // The Zod schemas are already aligned with these frontend expectations.
+    // The backend then maps these to DB columns (e.g. job_status, hiring_roles).
+
+    let payload: any = { ...data };
+
+    // Ensure numeric fields are numbers or undefined, not empty strings
+    const numericFieldsIndividual: (keyof IndividualPreferencesFormValues)[] = ['salary_expectation_min', 'salary_expectation_max'];
+    const numericFieldsCompany: (keyof CompanyPreferencesFormValues)[] = ['hiring_salary_min', 'hiring_salary_max'];
+
+    if (pageUserType === 'individual') {
+        numericFieldsIndividual.forEach(field => {
+            if (payload[field] === '' || payload[field] === null) payload[field] = undefined;
+            else if (payload[field] !== undefined) payload[field] = Number(payload[field]);
+        });
+    } else {
+        numericFieldsCompany.forEach(field => {
+            if (payload[field] === '' || payload[field] === null) payload[field] = undefined;
+            else if (payload[field] !== undefined) payload[field] = Number(payload[field]);
+        });
+    }
+
+    try {
+      await updateUserPreferences(payload, token);
+      toast.success("Preferences saved successfully!");
+      await refetchUser();
+
+      const nextStep = pageUserType === 'individual' ? 'culture' : 'done';
+      router.push(`/auth/ai integration/onboarding/${nextStep}?type=${pageUserType}`);
+    } catch (error: any) {
+      const errorMessage = error.data?.message || error.message || "Server error while updating preferences.";
+      toast.error(`Failed to save preferences: ${errorMessage}`);
+    }
+  };
   
-  // Company preferences
-  const [hiringStatus, setHiringStatus] = useState("actively-hiring")
-  const [employmentType, setEmploymentType] = useState("full-time")
-  const [roles, setRoles] = useState<string[]>(["Software Engineering"])
-  const [locations, setLocations] = useState<string[]>(["Noida"])
-  
-  // Individual preferences
-  const [jobStatus, setJobStatus] = useState("actively-looking")
-  const [desiredRoles, setDesiredRoles] = useState<string[]>(["Software Engineering"])
-  const [workArrangement, setWorkArrangement] = useState("hybrid")
-  const [experienceLevel, setExperienceLevel] = useState("mid-level")
-  const [salaryExpectation, setSalaryExpectation] = useState({ min: "", max: "", currency: "usd" })
-  const [careerGoals, setCareerGoals] = useState<string[]>([])
+
+  if (isAuthLoading) {
+    return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading preferences...</div>;
+  }
+  if (!user) {
+    toast.error("User not found. Redirecting to login.");
+    if (typeof window !== 'undefined') router.push('/auth/ai integration/login');
+    return <div className="min-h-screen flex items-center justify-center">Redirecting...</div>;
+  }
+
+  // Options for Selects (can be moved to constants file)
+  const roleOptions = [
+    { value: "Software Engineering", label: "Software Engineering" }, { value: "Product Management", label: "Product Management" },
+    { value: "Design & UX", label: "Design & UX" }, { value: "Data Science", label: "Data Science & Analytics" },
+    // Add more as needed
+  ];
+  const locationOptions = [
+    { value: "Remote", label: "🌍 Remote (Anywhere)" }, { value: "San Francisco, CA", label: "San Francisco, CA" },
+    { value: "New York, NY", label: "New York, NY" }, { value: "Noida, India", label: "Noida, India" },
+    // Add more
+  ];
+   const careerGoalOptions = [
+    { value: "Career Growth", label: "Career Growth"}, { value: "Work-Life Balance", label: "Work-Life Balance"},
+    { value: "High Compensation", label: "High Compensation"}, { value: "Learning New Technologies", label: "Learning New Technologies"},
+    // Add more
+  ];
+
 
   return (
     <div className="min-h-screen bg-brand-bg-light-gray py-8">
       <OnboardingStepper />
       
-      <div className="max-w-3xl mx-auto bg-white p-8 rounded-xl shadow-lg border border-gray-100 relative">
+      <div className="max-w-3xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-lg border border-gray-100 relative">
         <Button
-          className="absolute top-4 right-4 border-2 border-primary-navy bg-transparent text-primary-navy hover:bg-primary-navy hover:text-white focus:bg-primary-navy focus:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-navy rounded-xl font-subheading"
+          variant="outline"
+          className="absolute top-4 right-4 border-gray-300 text-gray-600 hover:bg-gray-100 text-xs sm:text-sm px-2 py-1 sm:px-3 sm:py-1.5"
           asChild
         >
-          <Link href={`/onboarding/culture?type=${userType}`}>Skip</Link>
+          <Link href={`/auth/ai integration/onboarding/${pageUserType === 'individual' ? 'culture' : 'done'}?type=${pageUserType}`}>Skip</Link>
         </Button>
 
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-brand-text-dark mb-3">
-            {userType === 'company' 
+          <h1 className="text-2xl sm:text-3xl font-bold text-brand-text-dark mb-3">
+            {pageUserType === 'company'
               ? 'What are you looking to hire?' 
               : 'What are your work preferences?'
             }
           </h1>
-          <p className="text-brand-text-medium leading-relaxed">
-            {userType === 'company'
+          <p className="text-sm sm:text-base text-brand-text-medium leading-relaxed">
+            {pageUserType === 'company'
               ? 'Help us understand your hiring needs to match you with the perfect candidates.'
               : 'Tell us about your work preferences to find the perfect opportunities.'
             }
           </p>
         </div>
         
-        <form className="space-y-10">
-          {userType === 'company' ? (
-            // Company Preferences
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-10">
+          {pageUserType === 'company' ? (
             <>
               {/* Hiring Status */}
               <div className="space-y-4">
-                <div className="flex items-center space-x-2 mb-4">
-                  <BuildingIcon className="h-5 w-5 text-black" />
-                  <Label className="text-base font-semibold text-brand-text-dark">
-                    What's your current hiring status? <span className="text-brand-red">*</span>
-                  </Label>
-                </div>
-                <div className="grid grid-cols-1 gap-4">
-                  {[
-                    {
-                      value: "actively-hiring",
-                      label: "Actively Hiring",
-                      desc: "We have open positions and are actively interviewing candidates.",
-                    },
-                    {
-                      value: "planning-to-hire",
-                      label: "Planning to Hire",
-                      desc: "We'll be hiring soon and want to start building our talent pipeline.",
-                    },
-                    {
-                      value: "not-hiring",
-                      label: "Not Hiring Right Now",
-                      desc: "We're not currently hiring but want to keep our company profile active.",
-                    },
-                  ].map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      onClick={() => setHiringStatus(item.value)}
-                      className={cn(
-                        "p-5 border rounded-xl text-left transition-all duration-200",
-                        hiringStatus === item.value
-                          ? "border-black ring-2 ring-black/20 bg-gray-50 shadow-md"
-                          : "border-brand-border hover:border-gray-400 bg-white hover:shadow-sm",
-                      )}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <span className="font-semibold text-brand-text-dark block mb-1">{item.label}</span>
-                          <p className="text-sm text-brand-text-medium leading-relaxed">{item.desc}</p>
-                        </div>
-                        {hiringStatus === item.value && (
-                          <CheckIcon className="w-5 h-5 text-black flex-shrink-0 mt-0.5" />
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                <div className="flex items-center space-x-2 mb-2 sm:mb-4"> <BuildingIcon className="h-5 w-5 text-black" /> <Label className="text-base font-semibold text-brand-text-dark"> Current hiring status? <span className="text-brand-red">*</span> </Label> </div>
+                <Controller name={"hiring_status" as keyof CompanyPreferencesFormValues} control={control} render={({ field }) => (
+                    <div className="grid grid-cols-1 gap-3 sm:gap-4">
+                      {[ { value: "actively-hiring", label: "Actively Hiring", desc: "Open positions, interviewing." }, { value: "planning-to-hire", label: "Planning to Hire", desc: "Hiring soon, building pipeline." }, { value: "not-hiring", label: "Not Hiring", desc: "Profile active, not hiring now." } ].map((item) => (
+                        <button key={item.value} type="button" onClick={() => field.onChange(item.value)} className={cn( "p-4 sm:p-5 border rounded-xl text-left transition-all duration-200", field.value === item.value ? "border-black ring-2 ring-black/20 bg-gray-50 shadow-md" : "border-brand-border hover:border-gray-400 bg-white hover:shadow-sm" )}>
+                          <div className="flex items-start justify-between"> <div className="flex-1"> <span className="font-semibold text-brand-text-dark block mb-1 text-sm sm:text-base">{item.label}</span> <p className="text-xs sm:text-sm text-brand-text-medium leading-relaxed">{item.desc}</p> </div> {field.value === item.value && ( <CheckIcon className="w-4 h-4 sm:w-5 sm:h-5 text-black flex-shrink-0 mt-0.5" /> )} </div>
+                        </button>
+                      ))}
+                    </div>
+                )}/>
+                {errors.hiring_status && <p className="text-red-500 text-xs mt-1">{(errors.hiring_status as any).message}</p>}
               </div>
 
               {/* Employment Type */}
-              <div className="space-y-4">
-                <Label className="block text-base font-semibold text-brand-text-dark">
-                  What type of employment are you offering? <span className="text-brand-red">*</span>
-                </Label>
-                <p className="text-sm text-brand-text-medium">
-                  Select the employment types you're currently hiring for.
-                </p>
-                <div className="flex flex-wrap gap-3">
-                  {[
-                    { id: "full-time", label: "Full-time Position" },
-                    { id: "part-time", label: "Part-time Position" },
-                    { id: "contract", label: "Contract Work" },
-                    { id: "freelance", label: "Freelance Projects" },
-                    { id: "intern", label: "Internship" }
-                  ].map((type) => (
-                    <ToggleButton
-                      key={type.id}
-                      value={type.id}
-                      selectedValue={employmentType}
-                      onSelect={setEmploymentType}
-                    >
-                      {type.label}
-                    </ToggleButton>
-                  ))}
-                </div>
+              <div className="space-y-3 sm:space-y-4">
+                <Label className="block text-base font-semibold text-brand-text-dark"> Employment type offered? <span className="text-brand-red">*</span> </Label>
+                <Controller name={"employmentType" as keyof CompanyPreferencesFormValues} control={control} render={({ field }) => (
+                    <div className="flex flex-wrap gap-2 sm:gap-3">
+                      {[ { id: "full-time", label: "Full-time" }, { id: "part-time", label: "Part-time" }, { id: "contract", label: "Contract" }, { id: "intern", label: "Internship" } ].map((type) => ( <ToggleButton key={type.id} value={type.id} selectedValue={field.value} onSelect={field.onChange}> {type.label} </ToggleButton> ))}
+                    </div>
+                )}/>
+                 {errors.employmentType && <p className="text-red-500 text-xs mt-1">{(errors.employmentType as any).message}</p>}
               </div>
 
-              {/* Salary Range */}
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2 mb-2">
-                  <DollarSignIcon className="h-5 w-5 text-black" />
-                  <Label htmlFor="salary" className="text-base font-semibold text-brand-text-dark">
-                    What's your salary range for these positions?
-                  </Label>
+              {/* Salary Range (Company) */}
+              <div className="space-y-3 sm:space-y-4">
+                <div className="flex items-center space-x-2 mb-1 sm:mb-2"> <DollarSignIcon className="h-5 w-5 text-black" /> <Label className="text-base font-semibold text-brand-text-dark"> Salary range for positions? </Label> </div>
+                <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                  <div> <Input type="number" placeholder="Min salary" {...register("hiring_salary_min" as keyof CompanyPreferencesFormValues)} className="h-11 sm:h-12"/> {errors.hiring_salary_min && <p className="text-red-500 text-xs mt-1">{(errors.hiring_salary_min as any).message}</p>}</div>
+                  <div> <Input type="number" placeholder="Max salary" {...register("hiring_salary_max" as keyof CompanyPreferencesFormValues)} className="h-11 sm:h-12"/> {errors.hiring_salary_max && <p className="text-red-500 text-xs mt-1">{(errors.hiring_salary_max as any).message}</p>}</div>
                 </div>
-                <p className="text-sm text-brand-text-medium bg-amber-50 p-3 rounded-lg border border-amber-200">
-                  <strong>Note:</strong> This helps us match you with candidates in your budget range
-                </p>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="relative">
-                    <DollarSignIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-brand-text-light" />
-                    <Input
-                      id="minSalary"
-                      type="number"
-                      placeholder="Min salary"
-                      className="bg-brand-bg-input border-brand-border pl-9 focus:border-black focus:ring-2 focus:ring-black/20"
-                    />
-                  </div>
-                  <div className="relative">
-                    <DollarSignIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-brand-text-light" />
-                    <Input
-                      id="maxSalary"
-                      type="number"
-                      placeholder="Max salary"
-                      className="bg-brand-bg-input border-brand-border pl-9 focus:border-black focus:ring-2 focus:ring-black/20"
-                    />
-                  </div>
-                </div>
-                <Select defaultValue="usd">
-                  <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="usd">USD ($)</SelectItem>
-                    <SelectItem value="eur">EUR (€)</SelectItem>
-                    <SelectItem value="gbp">GBP (£)</SelectItem>
-                    <SelectItem value="inr">INR (₹)</SelectItem>
-                    <SelectItem value="cad">CAD ($)</SelectItem>
-                    <SelectItem value="aud">AUD ($)</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Controller name={"hiring_salary_currency" as keyof CompanyPreferencesFormValues} control={control} render={({ field }) => (
+                  <Select onValueChange={field.onChange} value={field.value || "usd"}>
+                    <SelectTrigger className="h-11 sm:h-12"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="usd">USD ($)</SelectItem><SelectItem value="inr">INR (₹)</SelectItem></SelectContent>
+                  </Select>
+                )}/>
               </div>
 
               {/* Roles Hiring For */}
-              <div className="space-y-4">
-                <Label className="block text-base font-semibold text-brand-text-dark">
-                  Which roles are you hiring for?
-                </Label>
-                <p className="text-sm text-brand-text-medium">
-                  Select all roles you're currently hiring for. We'll match you with relevant candidates.
-                </p>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {roles.map((role) => (
-                    <span
-                      key={role}
-                      className="inline-flex items-center bg-black text-white text-sm font-medium px-4 py-2 rounded-full"
-                    >
-                      {role}
-                      <button
-                        type="button"
-                        onClick={() => setRoles((r) => r.filter((item) => item !== role))}
-                        className="ml-2 text-white hover:bg-gray-900 rounded-full p-0.5 transition-colors"
-                      >
-                        <XIcon className="h-3.5 w-3.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <Select onValueChange={(newRole) => !roles.includes(newRole) && setRoles((r) => [...r, newRole])}>
-                  <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20">
-                    <SelectValue placeholder="Add a role you're hiring for" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Software Engineering">Software Engineering</SelectItem>
-                    <SelectItem value="Product Management">Product Management</SelectItem>
-                    <SelectItem value="Design & UX">Design & UX</SelectItem>
-                    <SelectItem value="Data Science">Data Science & Analytics</SelectItem>
-                    <SelectItem value="Marketing">Marketing & Growth</SelectItem>
-                    <SelectItem value="Sales">Sales & Business Development</SelectItem>
-                    <SelectItem value="Operations">Operations & Strategy</SelectItem>
-                    <SelectItem value="Finance">Finance & Accounting</SelectItem>
-                    <SelectItem value="Human Resources">Human Resources</SelectItem>
-                    <SelectItem value="Customer Success">Customer Success</SelectItem>
-                    <SelectItem value="DevOps">DevOps & Infrastructure</SelectItem>
-                    <SelectItem value="Quality Assurance">Quality Assurance</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <Controller name={"hiring_roles" as keyof CompanyPreferencesFormValues} control={control} render={({ field }) => (
+                <MultiSelectChip Icon={BriefcaseIcon} label="Which roles are you hiring for?" availableOptions={roleOptions} selectedOptions={field.value || []} onChange={field.onChange} placeholder="Add a role" />
+              )}/>
+              {errors.hiring_roles && <p className="text-red-500 text-xs mt-1">{(errors.hiring_roles as any).message}</p>}
 
-              {/* Work Locations */}
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2 mb-2">
-                  <MapPinIcon className="h-5 w-5 text-black" />
-                  <Label className="block text-base font-semibold text-brand-text-dark">
-                    Where are these positions located?
-                  </Label>
-                </div>
-                <p className="text-sm text-brand-text-medium">
-                  Add all locations where you're hiring. Include remote if you offer it.
-                </p>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {locations.map((location) => (
-                    <span
-                      key={location}
-                      className="inline-flex items-center bg-gray-100 text-gray-800 text-sm font-medium px-4 py-2 rounded-full"
-                    >
-                      {location}
-                      <button
-                        type="button"
-                        onClick={() => setLocations((l) => l.filter((item) => item !== location))}
-                        className="ml-2 text-gray-600 hover:bg-gray-200 rounded-full p-0.5 transition-colors"
-                      >
-                        <XIcon className="h-3.5 w-3.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <Select onValueChange={(newLocation) => !locations.includes(newLocation) && setLocations((l) => [...l, newLocation])}>
-                  <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20">
-                    <SelectValue placeholder="Add a location" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Remote">🌍 Remote</SelectItem>
-                    <SelectItem value="Hybrid">🏢 Hybrid</SelectItem>
-                    <SelectItem value="San Francisco, CA">San Francisco, CA</SelectItem>
-                    <SelectItem value="New York, NY">New York, NY</SelectItem>
-                    <SelectItem value="Los Angeles, CA">Los Angeles, CA</SelectItem>
-                    <SelectItem value="Seattle, WA">Seattle, WA</SelectItem>
-                    <SelectItem value="Austin, TX">Austin, TX</SelectItem>
-                    <SelectItem value="Boston, MA">Boston, MA</SelectItem>
-                    <SelectItem value="Chicago, IL">Chicago, IL</SelectItem>
-                    <SelectItem value="Denver, CO">Denver, CO</SelectItem>
-                    <SelectItem value="Miami, FL">Miami, FL</SelectItem>
-                    <SelectItem value="London, UK">London, UK</SelectItem>
-                    <SelectItem value="Berlin, Germany">Berlin, Germany</SelectItem>
-                    <SelectItem value="Toronto, Canada">Toronto, Canada</SelectItem>
-                    <SelectItem value="Bangalore, India">Bangalore, India</SelectItem>
-                    <SelectItem value="Mumbai, India">Mumbai, India</SelectItem>
-                    <SelectItem value="Delhi, India">Delhi, India</SelectItem>
-                    <SelectItem value="Noida, India">Noida, India</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {/* Work Locations (Company) */}
+              <Controller name={"hiring_locations" as keyof CompanyPreferencesFormValues} control={control} render={({ field }) => (
+                <MultiSelectChip Icon={MapPinIcon} label="Where are these positions located?" availableOptions={locationOptions} selectedOptions={field.value || []} onChange={field.onChange} placeholder="Add location" />
+              )}/>
+              {errors.hiring_locations && <p className="text-red-500 text-xs mt-1">{(errors.hiring_locations as any).message}</p>}
             </>
-          ) : (
-            // Individual Preferences
+          ) : ( // Individual Preferences
             <>
-              {/* Job Search Status */}
               <div className="space-y-4">
-                <div className="flex items-center space-x-2 mb-4">
-                  <UserIcon className="h-5 w-5 text-black" />
-                  <Label className="text-base font-semibold text-brand-text-dark">
-                    What's your current availability status? <span className="text-brand-red">*</span>
-                  </Label>
-                </div>
-                <div className="grid grid-cols-1 gap-4">
-                  {[
-                    {
-                      value: "actively-looking",
-                      label: "Actively Available",
-                      desc: "I'm actively seeking new opportunities and projects.",
-                    },
-                    {
-                      value: "open-to-opportunities",
-                      label: "Open to Opportunities",
-                      desc: "I'm not actively searching but open to the right opportunity.",
-                    },
-                    {
-                      value: "exploring",
-                      label: "Just Exploring",
-                      desc: "I'm researching and exploring what's available in the market.",
-                    },
-                  ].map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      onClick={() => setJobStatus(item.value)}
-                      className={cn(
-                        "p-5 border rounded-xl text-left transition-all duration-200",
-                        jobStatus === item.value
-                          ? "border-black ring-2 ring-black/20 bg-gray-50 shadow-md"
-                          : "border-brand-border hover:border-gray-400 bg-white hover:shadow-sm",
-                      )}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <span className="font-semibold text-brand-text-dark block mb-1">{item.label}</span>
-                          <p className="text-sm text-brand-text-medium leading-relaxed">{item.desc}</p>
-                        </div>
-                        {jobStatus === item.value && (
-                          <CheckIcon className="w-5 h-5 text-black flex-shrink-0 mt-0.5" />
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                <div className="flex items-center space-x-2 mb-2 sm:mb-4"> <UserIcon className="h-5 w-5 text-black" /> <Label className="text-base font-semibold text-brand-text-dark"> Current availability status? <span className="text-brand-red">*</span> </Label> </div>
+                <Controller name={"job_status" as keyof IndividualPreferencesFormValues} control={control} render={({ field }) => (
+                    <div className="grid grid-cols-1 gap-3 sm:gap-4">
+                      {[ { value: "actively-looking", label: "Actively Available", desc: "Seeking new opportunities." }, { value: "open-to-opportunities", label: "Open to Opportunities", desc: "Not actively searching but open." }, { value: "exploring", label: "Just Exploring", desc: "Researching the market." } ].map((item) => (
+                        <button key={item.value} type="button" onClick={() => field.onChange(item.value)} className={cn( "p-4 sm:p-5 border rounded-xl text-left transition-all duration-200", field.value === item.value ? "border-black ring-2 ring-black/20 bg-gray-50 shadow-md" : "border-brand-border hover:border-gray-400 bg-white hover:shadow-sm" )}>
+                           <div className="flex items-start justify-between"> <div className="flex-1"> <span className="font-semibold text-brand-text-dark block mb-1 text-sm sm:text-base">{item.label}</span> <p className="text-xs sm:text-sm text-brand-text-medium leading-relaxed">{item.desc}</p> </div> {field.value === item.value && ( <CheckIcon className="w-4 h-4 sm:w-5 sm:h-5 text-black flex-shrink-0 mt-0.5" /> )} </div>
+                        </button>
+                      ))}
+                    </div>
+                )}/>
+                {errors.job_status && <p className="text-red-500 text-xs mt-1">{(errors.job_status as any).message}</p>}
               </div>
 
-              {/* Desired Roles */}
-              <div className="space-y-4">
-                <Label className="block text-base font-semibold text-brand-text-dark">
-                  What type of work are you interested in? <span className="text-brand-red">*</span>
-                </Label>
-                <p className="text-sm text-brand-text-medium">
-                  Select all the types of work you'd be interested in.
-                </p>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {desiredRoles.map((role) => (
-                    <span
-                      key={role}
-                      className="inline-flex items-center bg-black text-white text-sm font-medium px-4 py-2 rounded-full"
-                    >
-                      {role}
-                      <button
-                        type="button"
-                        onClick={() => setDesiredRoles((r) => r.filter((item) => item !== role))}
-                        className="ml-2 text-white hover:bg-gray-900 rounded-full p-0.5 transition-colors"
-                      >
-                        <XIcon className="h-3.5 w-3.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <Select onValueChange={(newRole) => !desiredRoles.includes(newRole) && setDesiredRoles((r) => [...r, newRole])}>
-                  <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20">
-                    <SelectValue placeholder="Add work type you're interested in" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Software Development">Software Development</SelectItem>
-                    <SelectItem value="Web Development">Web Development</SelectItem>
-                    <SelectItem value="Mobile App Development">Mobile App Development</SelectItem>
-                    <SelectItem value="UI/UX Design">UI/UX Design</SelectItem>
-                    <SelectItem value="Graphic Design">Graphic Design</SelectItem>
-                    <SelectItem value="Logo Design">Logo Design</SelectItem>
-                    <SelectItem value="Digital Marketing">Digital Marketing</SelectItem>
-                    <SelectItem value="Content Writing">Content Writing</SelectItem>
-                    <SelectItem value="Copywriting">Copywriting</SelectItem>
-                    <SelectItem value="SEO Services">SEO Services</SelectItem>
-                    <SelectItem value="Social Media Management">Social Media Management</SelectItem>
-                    <SelectItem value="Video Editing">Video Editing</SelectItem>
-                    <SelectItem value="Photography">Photography</SelectItem>
-                    <SelectItem value="Translation Services">Translation Services</SelectItem>
-                    <SelectItem value="Virtual Assistant">Virtual Assistant</SelectItem>
-                    <SelectItem value="Data Entry">Data Entry</SelectItem>
-                    <SelectItem value="Business Consulting">Business Consulting</SelectItem>
-                    <SelectItem value="Project Management">Project Management</SelectItem>
-                    <SelectItem value="Accounting & Finance">Accounting & Finance</SelectItem>
-                    <SelectItem value="Legal Services">Legal Services</SelectItem>
-                  </SelectContent>
-                </Select>
+              <Controller name={"desired_roles" as keyof IndividualPreferencesFormValues} control={control} render={({ field }) => (
+                <MultiSelectChip Icon={BriefcaseIcon} label="What type of work are you interested in?" availableOptions={roleOptions} selectedOptions={field.value || []} onChange={field.onChange} placeholder="Add work type" />
+              )}/>
+              {errors.desired_roles && <p className="text-red-500 text-xs mt-1">{(errors.desired_roles as any).message}</p>}
+
+              <div className="space-y-3 sm:space-y-4">
+                <Label className="block text-base font-semibold text-brand-text-dark"> Preferred work arrangement? <span className="text-brand-red">*</span> </Label>
+                <Controller name={"work_arrangement" as keyof IndividualPreferencesFormValues} control={control} render={({ field }) => (
+                    <div className="flex flex-wrap gap-2 sm:gap-3">
+                      {[ { id: "remote", label: "Remote" }, { id: "hybrid", label: "Hybrid" }, { id: "in-office", label: "In-Office" } ].map((item) => ( <ToggleButton key={item.id} value={item.id} selectedValue={field.value} onSelect={field.onChange}> {item.label} </ToggleButton> ))}
+                    </div>
+                )}/>
+                {errors.work_arrangement && <p className="text-red-500 text-xs mt-1">{(errors.work_arrangement as any).message}</p>}
               </div>
 
-              {/* Work Arrangement */}
-              <div className="space-y-4">
-                <Label className="block text-base font-semibold text-brand-text-dark">
-                  What's your preferred work arrangement? <span className="text-brand-red">*</span>
-                </Label>
-                <div className="flex flex-wrap gap-3">
-                  {[
-                    { id: "remote", label: "Remote Only" },
-                    { id: "hybrid", label: "Hybrid" },
-                    { id: "in-person", label: "In-Person/Local" },
-                    { id: "flexible", label: "Flexible/Open to All" }
-                  ].map((arrangement) => (
-                    <ToggleButton
-                      key={arrangement.id}
-                      value={arrangement.id}
-                      selectedValue={workArrangement}
-                      onSelect={setWorkArrangement}
-                    >
-                      {arrangement.label}
-                    </ToggleButton>
-                  ))}
-                </div>
+              <div className="space-y-3 sm:space-y-4">
+                <Label className="block text-base font-semibold text-brand-text-dark"> Target opportunity level? <span className="text-brand-red">*</span> </Label>
+                <Controller name={"experience_level_preference" as keyof IndividualPreferencesFormValues} control={control} render={({ field }) => (
+                    <div className="flex flex-wrap gap-2 sm:gap-3">
+                        {[ { id: "entry-level", label: "Entry (0-2 yrs)" }, { id: "mid-level", label: "Mid (3-5 yrs)" }, { id: "senior-level", label: "Senior (6-8 yrs)" }, {id: "lead-level", label: "Lead (9+ yrs)"} ].map((item) => ( <ToggleButton key={item.id} value={item.id} selectedValue={field.value} onSelect={field.onChange}> {item.label} </ToggleButton> ))}
+                    </div>
+                )}/>
+                {errors.experience_level_preference && <p className="text-red-500 text-xs mt-1">{(errors.experience_level_preference as any).message}</p>}
               </div>
 
-              {/* Experience Level */}
-              <div className="space-y-4">
-                <Label className="block text-base font-semibold text-brand-text-dark">
-                  What type of opportunities are you targeting? <span className="text-brand-red">*</span>
-                </Label>
-                <div className="flex flex-wrap gap-3">
-                  {[
-                    { id: "entry-level", label: "Entry Level/Learning" },
-                    { id: "mid-level", label: "Intermediate Projects" },
-                    { id: "senior-level", label: "Advanced/Expert Level" },
-                    { id: "lead-level", label: "Leadership/Consulting" },
-                    { id: "mixed", label: "Mixed/Variety" }
-                  ].map((level) => (
-                    <ToggleButton
-                      key={level.id}
-                      value={level.id}
-                      selectedValue={experienceLevel}
-                      onSelect={setExperienceLevel}
-                    >
-                      {level.label}
-                    </ToggleButton>
-                  ))}
+              <div className="space-y-3 sm:space-y-4">
+                <div className="flex items-center space-x-2 mb-1 sm:mb-2"> <DollarSignIcon className="h-5 w-5 text-black" /> <Label className="text-base font-semibold text-brand-text-dark"> Rate/compensation expectations? </Label> </div>
+                <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                  <div> <Input type="number" placeholder="Min rate/salary" {...register("salary_expectation_min" as keyof IndividualPreferencesFormValues)} className="h-11 sm:h-12"/> {errors.salary_expectation_min && <p className="text-red-500 text-xs mt-1">{(errors.salary_expectation_min as any).message}</p>}</div>
+                  <div> <Input type="number" placeholder="Max rate/salary" {...register("salary_expectation_max" as keyof IndividualPreferencesFormValues)} className="h-11 sm:h-12"/> {errors.salary_expectation_max && <p className="text-red-500 text-xs mt-1">{(errors.salary_expectation_max as any).message}</p>}</div>
                 </div>
+                 <Controller name={"salary_expectation_currency" as keyof IndividualPreferencesFormValues} control={control} render={({ field }) => (
+                  <Select onValueChange={field.onChange} value={field.value || "usd"}>
+                    <SelectTrigger className="h-11 sm:h-12"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="usd">USD ($)</SelectItem><SelectItem value="inr">INR (₹)</SelectItem></SelectContent>
+                  </Select>
+                )}/>
               </div>
 
-              {/* Salary Expectations */}
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2 mb-2">
-                  <DollarSignIcon className="h-5 w-5 text-black" />
-                  <Label className="text-base font-semibold text-brand-text-dark">
-                    What are your rate/compensation expectations?
-                  </Label>
-                </div>
-                <p className="text-sm text-brand-text-medium bg-blue-50 p-3 rounded-lg border border-blue-200">
-                  <strong>💡 Tip:</strong> Being transparent about rates helps match you with opportunities in your desired range
-                </p>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="relative">
-                    <DollarSignIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-brand-text-light" />
-                    <Input
-                      type="number"
-                      placeholder="Min rate/salary"
-                      value={salaryExpectation.min}
-                      onChange={(e) => setSalaryExpectation(prev => ({ ...prev, min: e.target.value }))}
-                      className="bg-brand-bg-input border-brand-border pl-9 focus:border-black focus:ring-2 focus:ring-black/20"
-                    />
-                  </div>
-                  <div className="relative">
-                    <DollarSignIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-brand-text-light" />
-                    <Input
-                      type="number"
-                      placeholder="Max rate/salary"
-                      value={salaryExpectation.max}
-                      onChange={(e) => setSalaryExpectation(prev => ({ ...prev, max: e.target.value }))}
-                      className="bg-brand-bg-input border-brand-border pl-9 focus:border-black focus:ring-2 focus:ring-black/20"
-                    />
-                  </div>
-                </div>
-                <Select value={salaryExpectation.currency} onValueChange={(currency) => setSalaryExpectation(prev => ({ ...prev, currency }))}>
-                  <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="usd">USD ($) - Annual</SelectItem>
-                    <SelectItem value="eur">EUR (€) - Annual</SelectItem>
-                    <SelectItem value="gbp">GBP (£) - Annual</SelectItem>
-                    <SelectItem value="inr">INR (₹) - Annual</SelectItem>
-                    <SelectItem value="cad">CAD ($) - Annual</SelectItem>
-                    <SelectItem value="aud">AUD ($) - Annual</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <Controller name={"career_goals" as keyof IndividualPreferencesFormValues} control={control} render={({ field }) => (
+                <MultiSelectChip Icon={TargetIcon} label="What are your career goals?" availableOptions={careerGoalOptions} selectedOptions={field.value || []} onChange={field.onChange} placeholder="Add career goal" />
+              )}/>
+              {errors.career_goals && <p className="text-red-500 text-xs mt-1">{(errors.career_goals as any).message}</p>}
 
-              {/* Career Goals */}
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2 mb-2">
-                  <TargetIcon className="h-5 w-5 text-black" />
-                  <Label className="block text-base font-semibold text-brand-text-dark">
-                    What are your career goals?
-                  </Label>
-                </div>
-                <p className="text-sm text-brand-text-medium">
-                  Select what matters most to you in your next role.
-                </p>
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    "Career Growth",
-                    "Work-Life Balance",
-                    "High Compensation",
-                    "Learning New Technologies",
-                    "Leadership Opportunities",
-                    "Startup Environment",
-                    "Established Company",
-                    "Remote Work",
-                    "Impactful Work",
-                    "Team Collaboration",
-                    "Innovation & Creativity",
-                    "Job Security"
-                  ].map((goal) => (
-                    <button
-                      key={goal}
-                      type="button"
-                      onClick={() => {
-                        if (careerGoals.includes(goal)) {
-                          setCareerGoals(prev => prev.filter(g => g !== goal))
-                        } else {
-                          setCareerGoals(prev => [...prev, goal])
-                        }
-                      }}
-                      className={cn(
-                        "p-3 text-sm font-medium rounded-lg border transition-all duration-200 text-left",
-                        careerGoals.includes(goal)
-                          ? "bg-black text-white border-black"
-                          : "bg-white text-brand-text-dark border-brand-border hover:border-gray-400"
-                      )}
-                    >
-                      {goal}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Preferred Locations */}
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2 mb-2">
-                  <MapPinIcon className="h-5 w-5 text-black" />
-                  <Label className="block text-base font-semibold text-brand-text-dark">
-                    Where are you open to working?
-                  </Label>
-                </div>
-                <p className="text-sm text-brand-text-medium">
-                  Select all locations you're willing to work in or relocate to.
-                </p>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {locations.map((location) => (
-                    <span
-                      key={location}
-                      className="inline-flex items-center bg-gray-100 text-gray-800 text-sm font-medium px-4 py-2 rounded-full"
-                    >
-                      {location}
-                      <button
-                        type="button"
-                        onClick={() => setLocations((l) => l.filter((item) => item !== location))}
-                        className="ml-2 text-gray-600 hover:bg-gray-200 rounded-full p-0.5 transition-colors"
-                      >
-                        <XIcon className="h-3.5 w-3.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <Select onValueChange={(newLocation) => !locations.includes(newLocation) && setLocations((l) => [...l, newLocation])}>
-                  <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20">
-                    <SelectValue placeholder="Add a preferred location" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Remote">🌍 Remote (Anywhere)</SelectItem>
-                    <SelectItem value="San Francisco, CA">San Francisco, CA</SelectItem>
-                    <SelectItem value="New York, NY">New York, NY</SelectItem>
-                    <SelectItem value="Los Angeles, CA">Los Angeles, CA</SelectItem>
-                    <SelectItem value="Seattle, WA">Seattle, WA</SelectItem>
-                    <SelectItem value="Austin, TX">Austin, TX</SelectItem>
-                    <SelectItem value="Boston, MA">Boston, MA</SelectItem>
-                    <SelectItem value="Chicago, IL">Chicago, IL</SelectItem>
-                    <SelectItem value="Denver, CO">Denver, CO</SelectItem>
-                    <SelectItem value="Miami, FL">Miami, FL</SelectItem>
-                    <SelectItem value="London, UK">London, UK</SelectItem>
-                    <SelectItem value="Berlin, Germany">Berlin, Germany</SelectItem>
-                    <SelectItem value="Toronto, Canada">Toronto, Canada</SelectItem>
-                    <SelectItem value="Bangalore, India">Bangalore, India</SelectItem>
-                    <SelectItem value="Mumbai, India">Mumbai, India</SelectItem>
-                    <SelectItem value="Delhi, India">Delhi, India</SelectItem>
-                    <SelectItem value="Noida, India">Noida, India</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <Controller name={"preferred_locations" as keyof IndividualPreferencesFormValues} control={control} render={({ field }) => (
+                <MultiSelectChip Icon={MapPinIcon} label="Where are you open to working?" availableOptions={locationOptions} selectedOptions={field.value || []} onChange={field.onChange} placeholder="Add preferred location" />
+              )}/>
+              {errors.preferred_locations && <p className="text-red-500 text-xs mt-1">{(errors.preferred_locations as any).message}</p>}
             </>
           )}
 
           <div className="pt-6">
             <Button
               type="submit"
+              disabled={isSubmitting}
               className="w-full bg-black hover:bg-gray-900 text-white py-3 font-medium text-base rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
-              asChild
             >
-              <Link href={userType === 'individual' ? `/onboarding/culture?type=${userType}` : `/onboarding/done?type=${userType}`}>
-                Continue {userType === 'individual' ? 'to Culture Fit →' : 'to Complete Setup →'}
-              </Link>
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isSubmitting ? "Saving..." : (pageUserType === 'individual' ? 'Continue to Culture Fit →' : 'Complete Setup →')}
             </Button>
           </div>
         </form>
       </div>
     </div>
-  )
+  );
+}
+
+export default function PreferencesPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading...</div>}>
+      <PreferencesPageContent />
+    </Suspense>
+  );
 }

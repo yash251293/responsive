@@ -69,6 +69,7 @@ router.get('/me', authMiddleware, async (req, res) => {
     const userQuery = `
       SELECT
         u.id, u.email, u.user_type, u.full_name, u.company_name, u.industry, u.company_size,
+        u.is_email_verified, u.is_phone_verified, -- Added verification flags
         u.created_at AS user_created_at, u.updated_at AS user_updated_at,
         up.location, up.professional_title, up.years_of_experience, up.job_function,
         up.key_skills, up.education_level, up.field_of_study, up.institution,
@@ -106,6 +107,8 @@ router.get('/me', authMiddleware, async (req, res) => {
       company_name: userData.company_name,
       industry: userData.industry,
       company_size: userData.company_size,
+      is_email_verified: userData.is_email_verified, // Added
+      is_phone_verified: userData.is_phone_verified, // Added
       user_created_at: userData.user_created_at,
       user_updated_at: userData.user_updated_at,
       profile: {

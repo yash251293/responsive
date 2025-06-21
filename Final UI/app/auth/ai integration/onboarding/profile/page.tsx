@@ -1,521 +1,410 @@
-"use client" // For form handling state
+"use client";
 
-import { useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
-import { SearchIcon, XIcon, MapPinIcon, BuildingIcon, LinkIcon, BriefcaseIcon, UsersIcon, UserIcon, GraduationCapIcon } from "lucide-react"
-import Link from "next/link"
-import { OnboardingStepper } from "@/components/onboarding-stepper"
-import { useSearchParams } from "next/navigation"
-import { AIFormField } from "@/components/ai-form-field"
+import { useState, useEffect, Suspense } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { SearchIcon, XIcon, MapPinIcon, BuildingIcon, LinkIcon, BriefcaseIcon, UsersIcon, UserIcon, GraduationCapIcon, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { OnboardingStepper } from "@/components/onboarding-stepper";
+import { useSearchParams, useRouter } from "next/navigation";
+import { AIFormField } from "@/components/ai-form-field"; // Assuming this component exists
+import { useForm, Controller, SubmitHandler } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
+import { updateUserProfile } from "@/lib/api";
 
-export default function ProfilePage() {
-  const searchParams = useSearchParams()
-  const userType = searchParams.get('type') || 'company'
-  const [location, setLocation] = useState("Noida, Uttar Pradesh")
-  const [searchLocation, setSearchLocation] = useState("")
+// --- Zod Schema Definitions ---
+const baseProfileSchema = z.object({
+  location: z.string().min(1, "Location is required.").optional(), // Made optional to allow skip, but required if user interacts
+  website_url: z.string().url("Invalid URL format.").optional().or(z.literal("")),
+  linkedin_url: z.string().url("Invalid URL format.").optional().or(z.literal("")),
+  bio: z.string().max(500, "Bio cannot exceed 500 characters.").optional(),
+});
+
+const individualSpecificSchema = z.object({
+  full_name: z.string().min(1, "Full name is required."), // From users table
+  professional_title: z.string().min(1, "Professional title is required.").optional(),
+  years_of_experience: z.string().optional(),
+  job_function: z.string().optional(),
+  key_skills: z.string().optional(), // Will be comma-separated string, convert to array if needed
+  education_level: z.string().optional(),
+  field_of_study: z.string().optional(),
+  institution: z.string().optional(),
+});
+
+const companySpecificSchema = z.object({
+  company_name: z.string().min(1, "Company name is required."), // From users table
+  industry: z.string().min(1, "Industry is required.").optional(), // From users table
+  company_size: z.string().optional(), // From users table
+  company_type: z.string().optional(),
+  tech_stack: z.string().optional(),
+  // bio: z.string().max(500, "Company description cannot exceed 500 characters.").optional(), // Re-defined from base for specific message
+});
+
+// Combined Schemas
+const individualProfileSchema = baseProfileSchema.merge(individualSpecificSchema);
+const companyProfileSchema = baseProfileSchema.merge(companySpecificSchema).extend({
+  bio: z.string().max(500, "Company description cannot exceed 500 characters.").optional(), // Override bio for company
+});
+
+
+type IndividualProfileFormValues = z.infer<typeof individualProfileSchema>;
+type CompanyProfileFormValues = z.infer<typeof companyProfileSchema>;
+// Use a conditional type or a more general one if needed for SubmitHandler if structure varies too much
+type ProfileFormValues = IndividualProfileFormValues | CompanyProfileFormValues;
+
+
+function ProfilePageContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const { user, token, refetchUser, isLoading: isAuthLoading } = useAuth();
+
+  // Determine userType from AuthContext first, then fallback to query param
+  const pageUserType = user?.user_type || searchParams.get('type') as 'individual' | 'company' || 'individual';
+
+  const currentSchema = pageUserType === 'company' ? companyProfileSchema : individualProfileSchema;
+
+  const { control, register, handleSubmit, formState: { errors, isSubmitting }, reset, watch, setValue } = useForm<ProfileFormValues>({
+    resolver: zodResolver(currentSchema),
+    defaultValues: {}, // Default values will be set by useEffect
+  });
   
-  // Form state for AI integration
-  const [companyDescription, setCompanyDescription] = useState("")
-  const [techStack, setTechStack] = useState("")
-  const [professionalTitle, setProfessionalTitle] = useState("")
-  const [keySkills, setKeySkills] = useState("")
+  // Local state for fields not directly part of react-hook-form but interactive (like location search)
+  // const [searchLocationInput, setSearchLocationInput] = useState(""); // For the input field itself
+  // const locationValue = watch("location"); // Watch location from RHF to display it
+
+  // Populate form with user data from context
+  useEffect(() => {
+    if (user) {
+      const defaultVals: Partial<ProfileFormValues> = {
+        full_name: pageUserType === 'individual' ? user.full_name || "" : undefined,
+        company_name: pageUserType === 'company' ? user.company_name || "" : undefined,
+        industry: pageUserType === 'company' ? user.industry || "" : undefined,
+        company_size: pageUserType === 'company' ? user.company_size || "" : undefined,
+        location: user.profile?.location || "",
+        professional_title: pageUserType === 'individual' ? user.profile?.professional_title || "" : undefined,
+        years_of_experience: pageUserType === 'individual' ? user.profile?.years_of_experience || "" : undefined,
+        job_function: pageUserType === 'individual' ? user.profile?.job_function || "" : undefined,
+        key_skills: pageUserType === 'individual' ? user.profile?.key_skills || "" : undefined,
+        education_level: pageUserType === 'individual' ? user.profile?.education_level || "" : undefined,
+        field_of_study: pageUserType === 'individual' ? user.profile?.field_of_study || "" : undefined,
+        institution: pageUserType === 'individual' ? user.profile?.institution || "" : undefined,
+        linkedin_url: user.profile?.linkedin_url || "",
+        website_url: user.profile?.website_url || "",
+        bio: user.profile?.bio || "",
+        company_type: pageUserType === 'company' ? user.profile?.company_type || "" : undefined,
+        tech_stack: pageUserType === 'company' ? user.profile?.tech_stack || "" : undefined,
+      };
+      reset(defaultVals);
+    }
+  }, [user, pageUserType, reset]);
+
+
+  const onSubmit: SubmitHandler<ProfileFormValues> = async (data) => {
+    if (!token) {
+      toast.error("Authentication token not found. Please log in again.");
+      return;
+    }
+
+    // Prepare payload: separate fields for 'users' table and 'user_profiles'
+    const usersTableUpdate: Partial<ProfileFormValues> = {};
+    const profileTableUpdate: Partial<ProfileFormValues> = { ...data }; // Start with all data
+
+    if (pageUserType === 'individual') {
+      if ('full_name' in data) usersTableUpdate.full_name = data.full_name;
+      delete profileTableUpdate.full_name; // Remove from profile payload
+    } else if (pageUserType === 'company') {
+      if ('company_name' in data) usersTableUpdate.company_name = data.company_name;
+      if ('industry' in data) usersTableUpdate.industry = data.industry;
+      if ('company_size' in data) usersTableUpdate.company_size = data.company_size;
+      delete profileTableUpdate.company_name;
+      delete profileTableUpdate.industry;
+      delete profileTableUpdate.company_size;
+    }
+
+    // Consolidate payload for the existing /api/users/profile endpoint
+    // The backend endpoint already handles splitting data between users and user_profiles table.
+    const finalPayload = { ...data };
+
+
+    try {
+      await updateUserProfile(finalPayload, token);
+      toast.success("Profile updated successfully!");
+      await refetchUser(); // Refresh user context data
+      router.push(`/auth/ai integration/onboarding/preferences?type=${pageUserType}`);
+    } catch (error: any) {
+      const errorMessage = error.data?.message || error.message || "Server error while updating profile.";
+      toast.error(`Failed to update profile: ${errorMessage}`);
+    }
+  };
+
+  if (isAuthLoading) {
+    return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading profile...</div>;
+  }
+
+  if (!user) {
+    toast.error("User not found. Redirecting to login.");
+    if (typeof window !== 'undefined') router.push('/auth/ai integration/login');
+    return <div className="min-h-screen flex items-center justify-center">Redirecting...</div>;
+  }
+
+  // For AIFormField context, ensure userType is correctly passed
+  const aiFormFieldContextUserType = user?.user_type || pageUserType;
+
 
   return (
     <div className="min-h-screen bg-brand-bg-light-gray py-8">
-      <OnboardingStepper />
-      <div className="max-w-3xl mx-auto bg-white p-8 rounded-xl shadow-lg border border-gray-100 relative">
+      <OnboardingStepper /> {/* This will use AuthContext to determine userType */}
+      <div className="max-w-3xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-lg border border-gray-100 relative">
         <Button
-          className="absolute top-4 right-4 border-2 border-primary-navy bg-transparent text-primary-navy hover:bg-primary-navy hover:text-white focus:bg-primary-navy focus:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-navy rounded-xl font-subheading"
+          variant="outline"
+          className="absolute top-4 right-4 border-gray-300 text-gray-600 hover:bg-gray-100 text-xs sm:text-sm px-2 py-1 sm:px-3 sm:py-1.5"
           asChild
         >
-          <Link href={`/onboarding/preferences?type=${userType}`}>Skip</Link>
+          <Link href={`/auth/ai integration/onboarding/preferences?type=${pageUserType}`}>Skip</Link>
         </Button>
 
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-black to-gray-800 rounded-2xl shadow-lg mb-4">
-            {userType === 'company' ? (
+            {pageUserType === 'company' ? (
               <BuildingIcon className="w-8 h-8 text-white" />
             ) : (
               <UserIcon className="w-8 h-8 text-white" />
             )}
           </div>
-          <h1 className="text-3xl font-bold text-brand-text-dark mb-3">
-            {userType === 'company' 
+          <h1 className="text-2xl sm:text-3xl font-bold text-brand-text-dark mb-3">
+            {pageUserType === 'company'
               ? 'Tell us about your company' 
               : 'Tell us about yourself'
             }
           </h1>
-          <p className="text-brand-text-medium leading-relaxed">
-            {userType === 'company'
+          <p className="text-sm sm:text-base text-brand-text-medium leading-relaxed">
+            {pageUserType === 'company'
               ? 'Share your company details to help us connect you with the right talent and opportunities.'
               : 'Share your details to help us connect you with the right opportunities and people.'
             }
           </p>
         </div>
 
-        <form className="space-y-10">
-          {/* Location Section */}
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-10">
+          {/* Location Section - Using Controller for custom component or direct register */}
           <div className="space-y-5">
             <div className="flex items-center space-x-2 mb-3">
               <MapPinIcon className="h-5 w-5 text-black" />
               <Label htmlFor="location" className="text-base font-semibold text-brand-text-dark">
-                {userType === 'company' 
+                {pageUserType === 'company'
                   ? 'Where is your company headquartered?' 
                   : 'Where are you located?'
                 } <span className="text-brand-red">*</span>
               </Label>
             </div>
-            <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-              <p className="text-sm text-gray-700">
-                <strong>💡 Location Benefits:</strong> {userType === 'company' 
+            <div className="bg-gray-50 p-3 sm:p-4 rounded-lg border border-gray-200">
+              <p className="text-xs sm:text-sm text-gray-700">
+                <strong>💡 Location Benefits:</strong> {pageUserType === 'company'
                   ? 'Your company location helps us match you with local talent and understand your regional market presence.'
                   : 'Your location helps us find relevant job opportunities and connect you with companies in your area.'
                 }
               </p>
             </div>
             
-            {location && (
-              <div className="animate-in slide-in-from-left duration-300">
-                <div className="inline-flex items-center bg-gradient-to-r from-black to-gray-800 text-white text-sm font-medium px-4 py-2.5 rounded-full shadow-md">
-                  <MapPinIcon className="h-4 w-4 mr-2" />
-                  {location}
-                  <button
-                    type="button"
-                    onClick={() => setLocation("")}
-                    className="ml-2 text-white hover:bg-white/20 rounded-full p-1 transition-colors"
-                  >
-                    <XIcon className="h-3 w-3" />
-                  </button>
-                </div>
-              </div>
-            )}
+            {/* Example if you want to display selected location - this needs to be tied to RHF state */}
+            {/* {watch("location") && ( ...display logic... )} */}
             
             <div className="relative">
               <Input
-                id="searchLocation"
+                id="location"
                 type="text"
                 placeholder="Search for a city, state, or country"
-                value={searchLocation}
-                onChange={(e) => setSearchLocation(e.target.value)}
-                className="bg-brand-bg-input border-brand-border placeholder-brand-text-light focus:border-black focus:ring-2 focus:ring-black/20 pl-10"
+                {...register("location")}
+                className="bg-brand-bg-input border-brand-border placeholder-brand-text-light focus:border-black focus:ring-2 focus:ring-black/20 pl-10 h-11 sm:h-12"
               />
               <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-brand-text-light" />
             </div>
+            {errors.location && <p className="text-red-500 text-xs mt-1">{errors.location.message}</p>}
           </div>
 
-          {userType === 'company' ? (
-            // Company Profile Sections
+          {pageUserType === 'company' ? (
             <>
-              {/* Company Details Section */}
               <div className="border-t border-brand-border pt-8 space-y-6">
-                <div className="flex items-center space-x-2 mb-6">
-                  <BuildingIcon className="h-5 w-5 text-black" />
-                  <h2 className="text-xl font-semibold text-brand-text-dark">Company Information</h2>
-                </div>
-
+                <div className="flex items-center space-x-2 mb-6"> <BuildingIcon className="h-5 w-5 text-black" /> <h2 className="text-lg sm:text-xl font-semibold text-brand-text-dark">Company Information</h2> </div>
                 <div className="space-y-6">
                   <div>
-                    <Label htmlFor="companyType" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      What type of company are you? <span className="text-brand-red">*</span>
-                    </Label>
-                    <Select>
-                      <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12">
-                        <SelectValue placeholder="Select company type" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="startup">🚀 Startup</SelectItem>
-                        <SelectItem value="enterprise">🏢 Enterprise</SelectItem>
-                        <SelectItem value="agency">🎯 Agency</SelectItem>
-                        <SelectItem value="nonprofit">💝 Non-Profit</SelectItem>
-                        <SelectItem value="government">🏛️ Government</SelectItem>
-                        <SelectItem value="other">🔧 Other</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="company_name" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Company Name <span className="text-brand-red">*</span></Label>
+                    <Input id="company_name" {...register("company_name" as keyof CompanyProfileFormValues)} placeholder="Your Company Inc." className="h-11 sm:h-12"/>
+                    {errors.company_name && <p className="text-red-500 text-xs mt-1">{(errors.company_name as any).message}</p>}
                   </div>
-
                   <div>
-                    <Label htmlFor="companySize" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Company Size <span className="text-brand-red">*</span>
-                    </Label>
-                    <Select>
-                      <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12">
-                        <SelectValue placeholder="Select company size" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1-10">👥 1-10 employees</SelectItem>
-                        <SelectItem value="11-50">👥 11-50 employees</SelectItem>
-                        <SelectItem value="51-200">👥 51-200 employees</SelectItem>
-                        <SelectItem value="201-500">👥 201-500 employees</SelectItem>
-                        <SelectItem value="501-1000">👥 501-1000 employees</SelectItem>
-                        <SelectItem value="1000+">👥 1000+ employees</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="company_type" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Company Type <span className="text-brand-red">*</span></Label>
+                    <Controller name={"company_type" as keyof CompanyProfileFormValues} control={control} render={({ field }) => (
+                      <Select onValueChange={field.onChange} value={field.value || undefined}>
+                        <SelectTrigger className="h-11 sm:h-12"><SelectValue placeholder="Select company type" /></SelectTrigger>
+                        <SelectContent><SelectItem value="startup">🚀 Startup</SelectItem><SelectItem value="enterprise">🏢 Enterprise</SelectItem></SelectContent>
+                      </Select>
+                    )}/>
+                    {errors.company_type && <p className="text-red-500 text-xs mt-1">{(errors.company_type as any).message}</p>}
                   </div>
-
                   <div>
-                    <Label htmlFor="companyDescription" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Company Description <span className="text-brand-red">*</span>
-                    </Label>
-                    <p className="text-sm text-brand-text-medium mb-4">
-                      Tell us about your company's mission, values, and what makes you unique.
-                    </p>
-                                         <AIFormField
-                       aiProps={{
-                         fieldType: 'textarea',
-                         fieldName: 'Company Description',
-                         placeholder: 'Describe your company...',
-                         value: companyDescription,
-                         onChange: (value) => setCompanyDescription(value as string),
-                         context: {
-                           userType: 'company'
-                         }
-                       }}
-                     >
-                      <Textarea
-                        id="companyDescription"
-                        value={companyDescription}
-                        onChange={(e) => setCompanyDescription(e.target.value)}
-                        placeholder="Describe your company..."
-                        className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 min-h-[120px]"
-                      />
+                    <Label htmlFor="company_size" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Company Size <span className="text-brand-red">*</span></Label>
+                     <Controller name={"company_size" as keyof CompanyProfileFormValues} control={control} render={({ field }) => (
+                      <Select onValueChange={field.onChange} value={field.value || undefined}>
+                        <SelectTrigger className="h-11 sm:h-12"><SelectValue placeholder="Select company size" /></SelectTrigger>
+                        <SelectContent><SelectItem value="1-10">👥 1-10</SelectItem><SelectItem value="11-50">👥 11-50</SelectItem></SelectContent>
+                      </Select>
+                    )}/>
+                    {errors.company_size && <p className="text-red-500 text-xs mt-1">{(errors.company_size as any).message}</p>}
+                  </div>
+                  <div>
+                    <Label htmlFor="bio" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Company Description <span className="text-brand-red">*</span></Label>
+                    <AIFormField aiProps={{ fieldType: 'textarea', fieldName: 'Company Description', placeholder: 'Describe your company...', context: { userType: aiFormFieldContextUserType } }}>
+                      <Textarea id="bio" {...register("bio" as keyof CompanyProfileFormValues)} placeholder="Describe your company..." className="min-h-[100px] sm:min-h-[120px]"/>
                     </AIFormField>
+                    {errors.bio && <p className="text-red-500 text-xs mt-1">{errors.bio.message}</p>}
                   </div>
                 </div>
               </div>
-
-              {/* Industry & Focus Section */}
               <div className="border-t border-brand-border pt-8 space-y-6">
-                <div className="flex items-center space-x-2 mb-6">
-                  <BriefcaseIcon className="h-5 w-5 text-black" />
-                  <h2 className="text-xl font-semibold text-brand-text-dark">Industry & Focus</h2>
-                </div>
-
+                <div className="flex items-center space-x-2 mb-6"> <BriefcaseIcon className="h-5 w-5 text-black" /> <h2 className="text-lg sm:text-xl font-semibold text-brand-text-dark">Industry & Focus</h2> </div>
                 <div className="space-y-6">
                   <div>
-                    <Label htmlFor="industry" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Primary Industry <span className="text-brand-red">*</span>
-                    </Label>
-                    <Select>
-                      <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12">
-                        <SelectValue placeholder="Select your industry" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="tech">💻 Technology</SelectItem>
-                        <SelectItem value="finance">💰 Finance</SelectItem>
-                        <SelectItem value="healthcare">🏥 Healthcare</SelectItem>
-                        <SelectItem value="education">📚 Education</SelectItem>
-                        <SelectItem value="retail">🛍️ Retail</SelectItem>
-                        <SelectItem value="manufacturing">🏭 Manufacturing</SelectItem>
-                        <SelectItem value="other">🔧 Other</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="industry" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Primary Industry <span className="text-brand-red">*</span></Label>
+                     <Controller name={"industry" as keyof CompanyProfileFormValues} control={control} render={({ field }) => (
+                      <Select onValueChange={field.onChange} value={field.value || undefined}>
+                        <SelectTrigger className="h-11 sm:h-12"><SelectValue placeholder="Select industry" /></SelectTrigger>
+                        <SelectContent><SelectItem value="tech">💻 Tech</SelectItem><SelectItem value="finance">💰 Finance</SelectItem></SelectContent>
+                      </Select>
+                    )}/>
+                    {errors.industry && <p className="text-red-500 text-xs mt-1">{(errors.industry as any).message}</p>}
                   </div>
-
                   <div>
-                    <Label htmlFor="techStack" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Tech Stack (if applicable)
-                    </Label>
-                    <p className="text-sm text-brand-text-medium mb-4">
-                      List the main technologies your company uses. This helps us match you with relevant talent.
-                    </p>
-                                         <AIFormField
-                       aiProps={{
-                         fieldType: 'text',
-                         fieldName: 'Tech Stack',
-                         placeholder: 'List the main technologies your company uses',
-                         value: techStack,
-                         onChange: (value) => setTechStack(value as string),
-                         context: {
-                           userType: 'company'
-                         }
-                       }}
-                     >
-                      <Input
-                        id="techStack"
-                        value={techStack}
-                        onChange={(e) => setTechStack(e.target.value)}
-                        placeholder="e.g., React, Node.js, Python, AWS"
-                        className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                      />
+                    <Label htmlFor="tech_stack" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Tech Stack</Label>
+                    <AIFormField aiProps={{ fieldType: 'text', fieldName: 'Tech Stack', placeholder: 'e.g., React, Node.js', context: { userType: aiFormFieldContextUserType } }}>
+                      <Input id="tech_stack" {...register("tech_stack" as keyof CompanyProfileFormValues)} placeholder="e.g., React, Node.js, Python, AWS" className="h-11 sm:h-12"/>
                     </AIFormField>
-                  </div>
-                </div>
-              </div>
-
-              {/* Company Links Section */}
-              <div className="border-t border-brand-border pt-8 space-y-6">
-                <div className="flex items-center space-x-2 mb-6">
-                  <LinkIcon className="h-5 w-5 text-black" />
-                  <h2 className="text-xl font-semibold text-brand-text-dark">Company Presence</h2>
-                </div>
-
-                <div className="space-y-6">
-                  <div>
-                    <Label htmlFor="website" className="block text-base font-semibold text-brand-text-dark mb-2">
-                      Company Website
-                    </Label>
-                    <Input
-                      id="website"
-                      placeholder="https://yourcompany.com"
-                      className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                    />
-                  </div>
-
-                  <div>
-                    <Label htmlFor="linkedin" className="block text-base font-semibold text-brand-text-dark mb-2">
-                      LinkedIn Company Page
-                    </Label>
-                    <Input
-                      id="linkedin"
-                      placeholder="https://linkedin.com/company/yourcompany"
-                      className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                    />
+                    {errors.tech_stack && <p className="text-red-500 text-xs mt-1">{(errors.tech_stack as any).message}</p>}
                   </div>
                 </div>
               </div>
             </>
-          ) : (
-            // Individual Profile Sections
+          ) : ( // Individual Profile Sections
             <>
-              {/* Personal Information Section */}
               <div className="border-t border-brand-border pt-8 space-y-6">
-                <div className="flex items-center space-x-2 mb-6">
-                  <UserIcon className="h-5 w-5 text-black" />
-                  <h2 className="text-xl font-semibold text-brand-text-dark">Personal Information</h2>
-                </div>
-
+                <div className="flex items-center space-x-2 mb-6"> <UserIcon className="h-5 w-5 text-black" /> <h2 className="text-lg sm:text-xl font-semibold text-brand-text-dark">Personal Information</h2> </div>
                 <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="firstName" className="block text-base font-semibold text-brand-text-dark mb-3">
-                        First Name <span className="text-brand-red">*</span>
-                      </Label>
-                      <Input
-                        id="firstName"
-                        placeholder="e.g. John"
-                        className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="lastName" className="block text-base font-semibold text-brand-text-dark mb-3">
-                        Last Name <span className="text-brand-red">*</span>
-                      </Label>
-                      <Input
-                        id="lastName"
-                        placeholder="e.g. Doe"
-                        className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                      />
-                    </div>
-                  </div>
-
                   <div>
-                    <Label htmlFor="professionalTitle" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      What do you do? <span className="text-brand-red">*</span>
-                    </Label>
-                                         <AIFormField
-                       aiProps={{
-                         fieldType: 'text',
-                         fieldName: 'Professional Title',
-                         placeholder: 'What do you do?',
-                         value: professionalTitle,
-                         onChange: (value) => setProfessionalTitle(value as string),
-                         context: {
-                           userType: 'individual'
-                         }
-                       }}
-                     >
-                      <Input
-                        id="professionalTitle"
-                        value={professionalTitle}
-                        onChange={(e) => setProfessionalTitle(e.target.value)}
-                        placeholder="e.g. Software Developer, Graphic Designer, Marketing Consultant, Writer"
-                        className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                      />
+                    <Label htmlFor="full_name" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Full Name <span className="text-brand-red">*</span></Label>
+                    <Input id="full_name" {...register("full_name" as keyof IndividualProfileFormValues)} placeholder="e.g. John Doe" className="h-11 sm:h-12"/>
+                    {errors.full_name && <p className="text-red-500 text-xs mt-1">{(errors.full_name as any).message}</p>}
+                  </div>
+                  <div>
+                    <Label htmlFor="professional_title" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">What do you do? <span className="text-brand-red">*</span></Label>
+                    <AIFormField aiProps={{ fieldType: 'text', fieldName: 'Professional Title', placeholder: 'e.g. Software Developer', context: { userType: aiFormFieldContextUserType } }}>
+                      <Input id="professional_title" {...register("professional_title" as keyof IndividualProfileFormValues)} placeholder="e.g. Software Developer" className="h-11 sm:h-12"/>
                     </AIFormField>
+                    {errors.professional_title && <p className="text-red-500 text-xs mt-1">{(errors.professional_title as any).message}</p>}
                   </div>
-
                   <div>
-                    <Label htmlFor="yearsOfExperience" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Experience Level <span className="text-brand-red">*</span>
-                    </Label>
-                    <Select>
-                      <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12">
-                        <SelectValue placeholder="Select your experience level" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="beginner">🌱 Beginner (0-2 years)</SelectItem>
-                        <SelectItem value="intermediate">📈 Intermediate (3-5 years)</SelectItem>
-                        <SelectItem value="experienced">💼 Experienced (6-8 years)</SelectItem>
-                        <SelectItem value="expert">🚀 Expert (9+ years)</SelectItem>
-                        <SelectItem value="specialist">⭐ Specialist/Consultant</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="years_of_experience" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Experience Level <span className="text-brand-red">*</span></Label>
+                    <Controller name={"years_of_experience" as keyof IndividualProfileFormValues} control={control} render={({ field }) => (
+                        <Select onValueChange={field.onChange} value={field.value || undefined}>
+                            <SelectTrigger className="h-11 sm:h-12"><SelectValue placeholder="Select experience" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="0-2">🌱 Beginner (0-2 years)</SelectItem>
+                                <SelectItem value="3-5">📈 Intermediate (3-5 years)</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    )}/>
+                    {errors.years_of_experience && <p className="text-red-500 text-xs mt-1">{(errors.years_of_experience as any).message}</p>}
                   </div>
                 </div>
               </div>
-
-              {/* Professional Background Section */}
               <div className="border-t border-brand-border pt-8 space-y-6">
-                <div className="flex items-center space-x-2 mb-6">
-                  <BriefcaseIcon className="h-5 w-5 text-black" />
-                  <h2 className="text-xl font-semibold text-brand-text-dark">Professional Background</h2>
-                </div>
-
-                <div className="space-y-6">
-                  <div>
-                    <Label htmlFor="primaryIndustry" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Primary Field <span className="text-brand-red">*</span>
-                    </Label>
-                    <Select>
-                      <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12">
-                        <SelectValue placeholder="Select your primary field" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="tech">💻 Technology & Development</SelectItem>
-                        <SelectItem value="design">🎨 Design & Creative</SelectItem>
-                        <SelectItem value="marketing">📢 Marketing & Communications</SelectItem>
-                        <SelectItem value="business">💼 Business & Strategy</SelectItem>
-                        <SelectItem value="finance">💰 Finance & Accounting</SelectItem>
-                        <SelectItem value="writing">✍️ Writing & Content</SelectItem>
-                        <SelectItem value="consulting">💡 Consulting</SelectItem>
-                        <SelectItem value="education">📚 Education & Training</SelectItem>
-                        <SelectItem value="healthcare">🏥 Healthcare</SelectItem>
-                        <SelectItem value="other">🔧 Other</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="jobFunction" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Specialization <span className="text-brand-red">*</span>
-                    </Label>
-                    <Select>
-                      <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12">
-                        <SelectValue placeholder="Select your specialization" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="frontend">🌐 Frontend Development</SelectItem>
-                        <SelectItem value="backend">⚙️ Backend Development</SelectItem>
-                        <SelectItem value="fullstack">🔗 Full Stack Development</SelectItem>
-                        <SelectItem value="mobile">📱 Mobile Development</SelectItem>
-                        <SelectItem value="uiux">🎨 UI/UX Design</SelectItem>
-                        <SelectItem value="graphic">🎭 Graphic Design</SelectItem>
-                        <SelectItem value="product">📋 Product Management</SelectItem>
-                        <SelectItem value="digital-marketing">📱 Digital Marketing</SelectItem>
-                        <SelectItem value="content">📝 Content Creation</SelectItem>
-                        <SelectItem value="copywriting">✏️ Copywriting</SelectItem>
-                        <SelectItem value="data">📊 Data Analysis</SelectItem>
-                        <SelectItem value="sales">💼 Sales</SelectItem>
-                        <SelectItem value="consulting">💡 Business Consulting</SelectItem>
-                        <SelectItem value="other">🔧 Other</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="keySkills" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Key Skills & Tools
-                    </Label>
-                    <p className="text-sm text-brand-text-medium mb-4">
-                      List your primary skills and tools (we'll dive deeper later).
-                    </p>
-                                         <AIFormField
-                       aiProps={{
-                         fieldType: 'text',
-                         fieldName: 'Key Skills',
-                         placeholder: 'List your primary skills and tools',
-                         value: keySkills,
-                         onChange: (value) => setKeySkills(value as string),
-                         context: {
-                           userType: 'individual',
-                           role: professionalTitle
-                         }
-                       }}
-                     >
-                      <Input
-                        id="keySkills"
-                        value={keySkills}
-                        onChange={(e) => setKeySkills(e.target.value)}
-                        placeholder="e.g., JavaScript, Photoshop, Google Ads, Project Management, WordPress"
-                        className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                      />
-                    </AIFormField>
-                  </div>
-                </div>
+                 <div className="flex items-center space-x-2 mb-6"> <BriefcaseIcon className="h-5 w-5 text-black" /> <h2 className="text-lg sm:text-xl font-semibold text-brand-text-dark">Professional Background</h2> </div>
+                 <div className="space-y-6">
+                    <div>
+                        <Label htmlFor="job_function" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Primary Field <span className="text-brand-red">*</span></Label>
+                        <Controller name={"job_function" as keyof IndividualProfileFormValues} control={control} render={({ field }) => (
+                            <Select onValueChange={field.onChange} value={field.value || undefined}>
+                                <SelectTrigger className="h-11 sm:h-12"><SelectValue placeholder="Select primary field" /></SelectTrigger>
+                                <SelectContent><SelectItem value="tech">💻 Tech</SelectItem><SelectItem value="design">🎨 Design</SelectItem></SelectContent>
+                            </Select>
+                        )}/>
+                        {errors.job_function && <p className="text-red-500 text-xs mt-1">{(errors.job_function as any).message}</p>}
+                    </div>
+                    <div>
+                        <Label htmlFor="key_skills" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Key Skills & Tools</Label>
+                        <AIFormField aiProps={{ fieldType: 'text', fieldName: 'Key Skills', placeholder: 'e.g., JavaScript, Photoshop', context: { userType: aiFormFieldContextUserType, role: watch("professional_title" as keyof IndividualProfileFormValues) } }}>
+                          <Input id="key_skills" {...register("key_skills" as keyof IndividualProfileFormValues)} placeholder="e.g., JavaScript, Photoshop" className="h-11 sm:h-12"/>
+                        </AIFormField>
+                        {errors.key_skills && <p className="text-red-500 text-xs mt-1">{(errors.key_skills as any).message}</p>}
+                    </div>
+                 </div>
               </div>
-
-              {/* Education Section */}
               <div className="border-t border-brand-border pt-8 space-y-6">
-                <div className="flex items-center space-x-2 mb-6">
-                  <GraduationCapIcon className="h-5 w-5 text-black" />
-                  <h2 className="text-xl font-semibold text-brand-text-dark">Education</h2>
-                </div>
-
+                <div className="flex items-center space-x-2 mb-6"> <GraduationCapIcon className="h-5 w-5 text-black" /> <h2 className="text-lg sm:text-xl font-semibold text-brand-text-dark">Education</h2> </div>
                 <div className="space-y-6">
-                  <div>
-                    <Label htmlFor="educationLevel" className="block text-base font-semibold text-brand-text-dark mb-3">
-                      Educational Background <span className="text-brand-red">*</span>
-                    </Label>
-                    <Select>
-                      <SelectTrigger className="w-full bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12">
-                        <SelectValue placeholder="Select your educational background" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="high-school">🏫 High School</SelectItem>
-                        <SelectItem value="associates">📜 Associate's Degree</SelectItem>
-                        <SelectItem value="bachelors">🎓 Bachelor's Degree</SelectItem>
-                        <SelectItem value="masters">🎖️ Master's Degree</SelectItem>
-                        <SelectItem value="phd">👨‍🎓 PhD/Doctorate</SelectItem>
-                        <SelectItem value="bootcamp">💻 Bootcamp/Intensive Course</SelectItem>
-                        <SelectItem value="self-taught">📚 Self-Taught</SelectItem>
-                        <SelectItem value="online-courses">🌐 Online Courses/Certifications</SelectItem>
-                        <SelectItem value="other">🔧 Other</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <Label htmlFor="fieldOfStudy" className="block text-base font-semibold text-brand-text-dark mb-3">
-                        Field of Study/Training
-                      </Label>
-                      <Input
-                        id="fieldOfStudy"
-                        placeholder="e.g. Computer Science, Marketing, Self-taught Web Design"
-                        className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                      />
+                        <Label htmlFor="education_level" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Educational Background <span className="text-brand-red">*</span></Label>
+                        <Controller name={"education_level" as keyof IndividualProfileFormValues} control={control} render={({ field }) => (
+                            <Select onValueChange={field.onChange} value={field.value || undefined}>
+                                <SelectTrigger className="h-11 sm:h-12"><SelectValue placeholder="Select education level" /></SelectTrigger>
+                                <SelectContent><SelectItem value="bachelors">🎓 Bachelor's</SelectItem><SelectItem value="masters">🎖️ Master's</SelectItem></SelectContent>
+                            </Select>
+                        )}/>
+                        {errors.education_level && <p className="text-red-500 text-xs mt-1">{(errors.education_level as any).message}</p>}
                     </div>
-                    <div>
-                      <Label htmlFor="institution" className="block text-base font-semibold text-brand-text-dark mb-3">
-                        Institution/Platform
-                      </Label>
-                      <Input
-                        id="institution"
-                        placeholder="e.g. Stanford University, Coursera, Udemy, YouTube"
-                        className="bg-brand-bg-input border-brand-border focus:border-black focus:ring-2 focus:ring-black/20 h-12"
-                      />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div><Label htmlFor="field_of_study" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Field of Study</Label><Input id="field_of_study" {...register("field_of_study" as keyof IndividualProfileFormValues)} placeholder="e.g. Computer Science" className="h-11 sm:h-12"/></div>
+                        <div><Label htmlFor="institution" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-3">Institution</Label><Input id="institution" {...register("institution" as keyof IndividualProfileFormValues)} placeholder="e.g. Stanford University" className="h-11 sm:h-12"/></div>
                     </div>
-                  </div>
                 </div>
               </div>
             </>
           )}
+          {/* Common Fields: Links and Bio */}
+           <div className="border-t border-brand-border pt-8 space-y-6">
+                <div className="flex items-center space-x-2 mb-6"> <LinkIcon className="h-5 w-5 text-black" /> <h2 className="text-lg sm:text-xl font-semibold text-brand-text-dark">Online Presence</h2> </div>
+                <div className="space-y-6">
+                    <div><Label htmlFor="website_url" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-2">Website</Label><Input id="website_url" {...register("website_url")} placeholder="https://yourpersonalwebsite.com" className="h-11 sm:h-12"/>{errors.website_url && <p className="text-red-500 text-xs mt-1">{errors.website_url.message}</p>}</div>
+                    <div><Label htmlFor="linkedin_url" className="block text-sm sm:text-base font-semibold text-brand-text-dark mb-2">LinkedIn Profile</Label><Input id="linkedin_url" {...register("linkedin_url")} placeholder="https://linkedin.com/in/yourprofile" className="h-11 sm:h-12"/>{errors.linkedin_url && <p className="text-red-500 text-xs mt-1">{errors.linkedin_url.message}</p>}</div>
+                </div>
+           </div>
+            <div className="border-t border-brand-border pt-8 space-y-4">
+                <Label htmlFor="bio" className="block text-base font-semibold text-brand-text-dark mb-3">
+                    {pageUserType === 'company' ? 'Company Overview / Mission' : 'Your Professional Bio'}
+                    <span className="text-brand-red">*</span>
+                </Label>
+                 <AIFormField aiProps={{ fieldType: 'textarea', fieldName: pageUserType === 'company' ? 'Company Overview' : 'Professional Bio', placeholder: 'Tell us more...', context: { userType: aiFormFieldContextUserType } }}>
+                    <Textarea id="bio" {...register("bio")} placeholder="Share a brief summary..." className="min-h-[100px] sm:min-h-[120px]"/>
+                 </AIFormField>
+                {errors.bio && <p className="text-red-500 text-xs mt-1">{errors.bio.message}</p>}
+            </div>
+
 
           <div className="pt-6">
             <Button
               type="submit"
+              disabled={isSubmitting}
               className="w-full bg-black hover:bg-gray-900 text-white py-3 font-medium text-base rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
-              asChild
             >
-              <Link href={`/onboarding/preferences?type=${userType}`}>Continue to Preferences →</Link>
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isSubmitting ? "Saving..." : "Continue to Preferences →"}
             </Button>
           </div>
         </form>
       </div>
     </div>
-  )
+  );
+}
+
+export default function ProfilePage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading...</div>}>
+      <ProfilePageContent />
+    </Suspense>
+  );
 }

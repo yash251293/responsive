@@ -158,3 +158,12 @@ export const markUserAsVerified = async (token: string) => {
     // No body needed for this specific request if backend uses token for user ID
   });
 };
+
+export const markUserEmailAsVerified = async (token: string) => {
+  return request<any>('/auth/mark-email-as-verified', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+};

@@ -176,21 +176,127 @@ router.post('/login', async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || '1h' } // Default to 1 hour if not set
     );
 
+    // Fetch the full user details, including profile, similar to /users/me
+    const fullUserQuery = `
+      SELECT
+        u.id, u.email, u.user_type, u.full_name, u.company_name, u.industry, u.company_size,
+        u.is_email_verified, u.is_phone_verified,
+        u.created_at AS user_created_at, u.updated_at AS user_updated_at,
+        up.location, up.professional_title, up.years_of_experience, up.job_function,
+        up.key_skills, up.education_level, up.field_of_study, up.institution,
+        up.linkedin_url, up.website_url, up.bio, up.company_type, up.tech_stack,
+        up.created_at AS profile_created_at, up.updated_at AS profile_updated_at,
+        up.job_status, up.desired_roles, up.work_arrangement, up.experience_level_preference,
+        up.salary_expectation_min, up.salary_expectation_max, up.salary_expectation_currency,
+        up.career_goals, up.preferred_locations,
+        up.hiring_status, up.offered_employment_types, up.hiring_roles, up.hiring_locations,
+        up.hiring_salary_min, up.hiring_salary_max, up.hiring_salary_currency,
+        up.culture_preferences, up.remote_policy_importance, up.quiet_office_importance,
+        up.ideal_next_job_description,
+        up.resume_file_path
+      FROM users u
+      LEFT JOIN user_profiles up ON u.id = up.user_id
+      WHERE u.id = $1;
+    `;
+    const { rows: fullUserRows } = await db.query(fullUserQuery, [user.id]);
+    if (fullUserRows.length === 0) {
+      // Should not happen if user was just retrieved, but as a safeguard
+      return res.status(500).json({ message: 'Error fetching full user details after login.' });
+    }
+    const fullUserData = fullUserRows[0];
+    const userResponse = {
+      id: fullUserData.id,
+      email: fullUserData.email,
+      user_type: fullUserData.user_type,
+      full_name: fullUserData.full_name,
+      company_name: fullUserData.company_name,
+      industry: fullUserData.industry,
+      company_size: fullUserData.company_size,
+      is_email_verified: fullUserData.is_email_verified,
+      is_phone_verified: fullUserData.is_phone_verified,
+      user_created_at: fullUserData.user_created_at,
+      user_updated_at: fullUserData.user_updated_at,
+      profile: {
+        location: fullUserData.location,
+        professional_title: fullUserData.professional_title,
+        years_of_experience: fullUserData.years_of_experience,
+        job_function: fullUserData.job_function,
+        key_skills: fullUserData.key_skills,
+        education_level: fullUserData.education_level,
+        field_of_study: fullUserData.field_of_study,
+        institution: fullUserData.institution,
+        linkedin_url: fullUserData.linkedin_url,
+        website_url: fullUserData.website_url,
+        bio: fullUserData.bio,
+        company_type: fullUserData.company_type,
+        tech_stack: fullUserData.tech_stack,
+        profile_created_at: fullUserData.profile_created_at,
+        profile_updated_at: fullUserData.profile_updated_at,
+        job_status: fullUserData.job_status,
+        desired_roles: fullUserData.desired_roles,
+        work_arrangement: fullUserData.work_arrangement,
+        experience_level_preference: fullUserData.experience_level_preference,
+        salary_expectation_min: fullUserData.salary_expectation_min,
+        salary_expectation_max: fullUserData.salary_expectation_max,
+        salary_expectation_currency: fullUserData.salary_expectation_currency,
+        career_goals: fullUserData.career_goals,
+        preferred_locations: fullUserData.preferred_locations,
+        hiring_status: fullUserData.hiring_status,
+        offered_employment_types: fullUserData.offered_employment_types,
+        hiring_roles: fullUserData.hiring_roles,
+        hiring_locations: fullUserData.hiring_locations,
+        hiring_salary_min: fullUserData.hiring_salary_min,
+        hiring_salary_max: fullUserData.hiring_salary_max,
+        hiring_salary_currency: fullUserData.hiring_salary_currency,
+        culture_preferences: fullUserData.culture_preferences,
+        remote_policy_importance: fullUserData.remote_policy_importance,
+        quiet_office_importance: fullUserData.quiet_office_importance,
+        ideal_next_job_description: fullUserData.ideal_next_job_description,
+        resume_file_path: fullUserData.resume_file_path
+      }
+    };
+     if (userResponse.profile.bio === null && userResponse.profile.location === null) { // Basic check
+      userResponse.profile = null;
+    }
+
     res.json({
       message: 'Logged in successfully!',
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        user_type: user.user_type,
-        full_name: user.full_name,
-        company_name: user.company_name
-      }
+      user: userResponse
     });
 
   } catch (error) {
     console.error('Error during login:', error);
     res.status(500).json({ message: 'Server error during login.' });
+  }
+});
+
+// POST /api/auth/mark-email-as-verified - Mark user's email as verified
+// Protected route: Requires authentication
+router.post('/mark-email-as-verified', authMiddleware, async (req, res, next) => {
+  const userId = req.user.userId;
+
+  try {
+    const updateQuery = `
+      UPDATE users
+      SET is_email_verified = TRUE, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING id, email, is_email_verified;
+    `;
+    const { rows } = await db.query(updateQuery, [userId]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'User not found to mark email as verified.' });
+    }
+
+    res.status(200).json({
+      message: 'User email marked as verified successfully.',
+      user: rows[0]
+    });
+  } catch (error) {
+    console.error('Error marking user email as verified:', error);
+    const err = new Error('Server error while marking user email as verified.');
+    next(err);
   }
 });
 
