@@ -147,7 +147,7 @@ const isCultureComplete = (user: any, userType: string | undefined): boolean => 
 
 const isResumeComplete = (user: any, userType: string | undefined): boolean => {
   if (userType !== 'individual' || !user?.profile) return false;
-  return !!profile.resume_file_path;
+  return !!user.profile.resume_file_path; // Corrected: user.profile.resume_file_path
 };
 
 // Map step hrefs to completion functions
