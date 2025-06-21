@@ -146,7 +146,15 @@ function PreferencesPageContent() {
   const router = useRouter();
   const { user, token, refetchUser, isLoading: isAuthLoading } = useAuth();
 
-  const pageUserType = user?.user_type || searchParams.get('type') as 'individual' | 'company' || 'individual';
+  // Prioritize user.user_type from AuthContext if user is loaded, otherwise fallback to searchParam, then to 'individual'
+  const queryParamType = searchParams.get('type') as 'individual' | 'company' | null;
+  const resolvedUserTypeFromContext = user ? user.user_type : null;
+  const pageUserType = resolvedUserTypeFromContext || queryParamType || 'individual';
+
+  console.log("[PreferencesPage] Initial User from AuthContext:", user);
+  console.log("[PreferencesPage] Query Param 'type':", queryParamType);
+  console.log("[PreferencesPage] Resolved pageUserType for UI/Schema:", pageUserType);
+
   const currentSchema = pageUserType === 'company' ? companyPreferencesSchema : individualPreferencesSchema;
 
   const { control, register, handleSubmit, formState: { errors, isSubmitting }, reset, watch, setValue } = useForm<PreferencesFormValues>({
@@ -240,9 +248,26 @@ function PreferencesPageContent() {
       toast.success("Preferences saved successfully!");
       await refetchUser();
 
-      const nextStep = pageUserType === 'individual' ? 'culture' : 'done';
-      router.push(`/auth/ai integration/onboarding/${nextStep}?type=${pageUserType}`);
+      // It's crucial to use the most up-to-date user information for navigation decision,
+      // ideally from the 'user' object in context after it has been refetched and component re-rendered.
+      // The 'pageUserType' defined at the top of the component will be based on the state of 'user' during that render.
+      // After 'refetchUser()' and subsequent re-render, this 'pageUserType' should be correct.
+
+      const userTypeForNav = user ? user.user_type : pageUserType; // Prefer fresh user.user_type if available after refetch logic settles
+
+      console.log("[PreferencesPage] onSubmit - User from AuthContext (after refetch attempt):", user);
+      console.log("[PreferencesPage] onSubmit - pageUserType (from component scope):", pageUserType);
+      console.log("[PreferencesPage] onSubmit - userTypeForNav (for navigation decision):", userTypeForNav);
+
+      const nextStep = userTypeForNav === 'individual' ? 'culture' : 'done';
+      const navigationPath = `/auth/ai integration/onboarding/${nextStep}?type=${userTypeForNav}`;
+
+      console.log("[PreferencesPage] onSubmit - Calculated nextStep:", nextStep);
+      console.log("[PreferencesPage] onSubmit - Navigating to:", navigationPath);
+
+      router.push(navigationPath);
     } catch (error: any) {
+      console.error("[PreferencesPage] onSubmit error:", error);
       const errorMessage = error.data?.message || error.message || "Server error while updating preferences.";
       toast.error(`Failed to save preferences: ${errorMessage}`);
     }
@@ -254,7 +279,10 @@ function PreferencesPageContent() {
   }
   if (!user) {
     toast.error("User not found. Redirecting to login.");
-    if (typeof window !== 'undefined') router.push('/auth/ai integration/login');
+    if (typeof window !== 'undefined') {
+        console.log("[PreferencesPage] No user context, redirecting to login.");
+        router.push('/auth/ai integration/login');
+    }
     return <div className="min-h-screen flex items-center justify-center">Redirecting...</div>;
   }
 
