@@ -421,36 +421,40 @@ router.put('/culture', authMiddleware, async (req, res, next) => {
     .join(', ');
   const values = Object.values(cultureFieldsToUpdate);
 
-  const updateQuery = `
-    UPDATE user_profiles
-    SET ${setClauses}, updated_at = CURRENT_TIMESTAMP
-    WHERE user_id = $1
+  // Constructing fields for UPSERT
+  const allFieldsForUpsert = { user_id: userId, ...cultureFieldsToUpdate };
+  const columns = Object.keys(allFieldsForUpsert);
+  const valuePlaceholders = columns.map((_, index) => `$${index + 1}`).join(', ');
+  const columnValues = Object.values(allFieldsForUpsert);
+
+  // For ON CONFLICT ... DO UPDATE SET clause
+  // We want to update all fields provided in cultureFieldsToUpdate.
+  // user_id is the conflict target and should not be in the SET part.
+  const updateSetClauses = Object.keys(cultureFieldsToUpdate)
+    .map(key => `"${key}" = EXCLUDED."${key}"`) // EXCLUDED refers to the values from the attempted INSERT
+    .join(', ');
+
+  const upsertQuery = `
+    INSERT INTO user_profiles (${columns.map(col => `"${col}"`).join(', ')})
+    VALUES (${valuePlaceholders})
+    ON CONFLICT (user_id) DO UPDATE SET
+      ${updateSetClauses}, updated_at = CURRENT_TIMESTAMP
     RETURNING *;
   `;
 
   try {
-    // Ensure user_profiles row exists before attempting to update
-    const userProfileCheck = await db.query('SELECT 1 FROM user_profiles WHERE user_id = $1', [userId]);
-    if (userProfileCheck.rows.length === 0) {
-        // If no profile exists, it's an issue. Preferences should ideally be part of a profile.
-        // Consider if an UPSERT or initial profile creation step was missed for this user.
-        // For now, returning 404 as the main /profile PUT handles creation/upsert.
-        return res.status(404).json({ message: 'User profile does not exist. Please complete initial profile setup before setting culture preferences.' });
-    }
-
-    const { rows } = await db.query(updateQuery, [userId, ...values]);
-    // rows.length check here might be redundant if userProfileCheck passes and user_id is from token,
-    // unless the user_id somehow became invalid between checks (highly unlikely).
-    // However, keeping it as a safeguard or if the profile could be deleted by another process.
+    const { rows } = await db.query(upsertQuery, columnValues);
     if (rows.length === 0) {
-      return res.status(404).json({ message: 'Failed to update culture preferences or user profile not found.' });
+      // This should ideally not happen with a successful UPSERT RETURNING *
+      // unless there's a very unusual DB issue or misconfiguration.
+      return res.status(500).json({ message: 'Failed to update or insert culture preferences.' });
     }
     res.status(200).json({ message: 'Culture preferences updated successfully.', culture_info: rows[0] });
   } catch (error) {
-    console.error('Error updating culture preferences:', error);
+    console.error('Error upserting culture preferences:', error);
     const err = new Error('Server error while updating culture preferences.');
-    err.statusCode = 500; // It's good practice to set a status code
-    next(err);
+    // err.statusCode = 500; // Global error handler will set 500 if not specified
+    next(err); // Pass to global error handler
   }
 });
 
