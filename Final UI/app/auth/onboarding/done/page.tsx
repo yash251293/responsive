@@ -110,7 +110,7 @@ function OnboardingDonePageContent() {
 
   return (
     <div className="min-h-screen bg-brand-bg-light-gray py-8">
-      <OnboardingStepper />
+      {/* <OnboardingStepper /> REMOVED - Stepper is now handled by layout.tsx */}
       <div className="max-w-3xl mx-auto bg-white p-8 rounded-xl shadow-lg border border-gray-100">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-lg mb-6">
