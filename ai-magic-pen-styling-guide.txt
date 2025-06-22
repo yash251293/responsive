@@ -1,0 +1,338 @@
+# AI Magic Pen Component - Complete Styling Guide
+
+This document contains all the styling details for the AI Assistant component that can be used to replicate the exact design in other projects.
+
+## 1. TAILWIND CONFIG COLORS
+Add these colors to your tailwind.config.ts:
+
+```typescript
+colors: {
+  "primary-navy": "#1e3a8a",     // Main navy blue for primary actions
+  "brand-blue": "#1591ea",       // Alternative blue
+  "brand-text-dark": "#303031",  // Dark text
+  "brand-text-medium": "#66645e", // Medium gray text
+  "brand-bg-light-gray": "#f9f9f9", // Light gray background
+}
+```
+
+## 2. REQUIRED DEPENDENCIES
+```bash
+npm install lucide-react
+npm install @radix-ui/react-dialog
+npm install tailwindcss-animate
+```
+
+## 3. REQUIRED ICONS (from lucide-react)
+- BrainIcon
+- WandIcon
+- SparklesIcon
+- LoaderIcon
+- CheckIcon
+- RefreshCwIcon
+- XIcon
+- EditIcon
+- ArrowRightIcon
+
+## 4. AI MAGIC BUTTON STYLING
+
+```jsx
+<Button
+  type="button"
+  style={{
+    backgroundColor: 'transparent',
+    border: '1px solid #1e3a8a',
+    color: '#1e3a8a'
+  }}
+  className={cn(
+    "rounded-xl font-subheading hover:bg-primary-navy hover:text-white",
+    "h-9 px-4 text-sm font-medium",
+    "transition-all duration-200",
+    "flex items-center gap-2"
+  )}
+>
+  <BrainIcon className="w-4 h-4" />
+  <WandIcon className="w-4 h-4" />
+  <span>AI Assistant</span>
+</Button>
+```
+
+## 5. DIALOG CONTAINER STYLING
+
+```jsx
+<Dialog open={isOpen} onOpenChange={onClose}>
+  <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+    <DialogHeader>
+      <DialogTitle className="flex items-center gap-2 text-xl">
+        <BrainIcon className="w-6 h-6 text-primary-navy" />
+        AI Writing Assistant
+      </DialogTitle>
+      <DialogDescription className="text-base">
+        Tell me what you want to write in your own words, and I'll help you create professional content for your <span className="font-medium text-primary-navy">{fieldName}</span>.
+      </DialogDescription>
+    </DialogHeader>
+    
+    <div className="space-y-6 mt-6">
+      {/* Content goes here */}
+    </div>
+  </DialogContent>
+</Dialog>
+```
+
+## 6. STEP INDICATORS STYLING
+
+```jsx
+// Step 1 - Navy Blue
+<div className="w-6 h-6 bg-primary-navy text-white rounded-full flex items-center justify-center text-sm font-bold">1</div>
+
+// Step 2 - Green
+<div className="w-6 h-6 bg-green-600 text-white rounded-full flex items-center justify-center text-sm font-bold">2</div>
+
+// Step 3 - Purple
+<div className="w-6 h-6 bg-purple-600 text-white rounded-full flex items-center justify-center text-sm font-bold">3</div>
+```
+
+## 7. USER INPUT SECTION STYLING
+
+```jsx
+<div className="space-y-3">
+  <div className="flex items-center gap-2">
+    <div className="w-6 h-6 bg-primary-navy text-white rounded-full flex items-center justify-center text-sm font-bold">1</div>
+    <Label className="text-base font-medium">What do you want to say?</Label>
+  </div>
+  
+  <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+    <p className="text-sm text-blue-700 mb-3">
+      <strong>💡 Tip:</strong> {getFieldPrompt()}
+    </p>
+    <Textarea
+      value={userInput}
+      onChange={(e) => setUserInput(e.target.value)}
+      placeholder="Type your thoughts here in simple words..."
+      className="min-h-[100px] bg-white border-blue-200 focus:border-primary-navy focus:ring-2 focus:ring-primary-navy/20"
+    />
+  </div>
+  
+  <div className="flex gap-3">
+    {/* Generate Button */}
+    <Button
+      onClick={generateAIContent}
+      disabled={!userInput.trim() || isGenerating}
+      style={{
+        backgroundColor: !userInput.trim() || isGenerating ? '#d1d5db' : '#1e3a8a',
+        color: !userInput.trim() || isGenerating ? '#6b7280' : '#ffffff',
+        border: 'none'
+      }}
+      className="flex-1 font-medium transition-colors duration-200"
+    >
+      {isGenerating ? (
+        <>
+          <LoaderIcon className="w-4 h-4 mr-2 animate-spin" />
+          AI is refining your content...
+        </>
+      ) : (
+        <>
+          <WandIcon className="w-4 h-4 mr-2" />
+          <SparklesIcon className="w-4 h-4 mr-2" />
+          Refine with AI
+        </>
+      )}
+    </Button>
+    
+    {/* Clear Button */}
+    <Button
+      type="button"
+      variant="outline"
+      onClick={() => {
+        setUserInput("")
+        setSuggestions([])
+        setSelectedSuggestion("")
+      }}
+      disabled={isGenerating}
+      className="px-4 border-gray-300 text-gray-700 hover:bg-gray-50"
+    >
+      Clear
+    </Button>
+  </div>
+  
+  <p className="text-xs text-gray-500 text-center mt-2">
+    💡 Tip: Press Ctrl+Enter (Cmd+Enter on Mac) to quickly submit
+  </p>
+</div>
+```
+
+## 8. AI SUGGESTIONS SECTION STYLING
+
+```jsx
+{(suggestions.length > 0 || isGenerating) && (
+  <div className="space-y-3">
+    <div className="flex items-center gap-2">
+      <div className="w-6 h-6 bg-green-600 text-white rounded-full flex items-center justify-center text-sm font-bold">2</div>
+      <Label className="text-base font-medium">Choose your refined content</Label>
+    </div>
+    
+    {isGenerating ? (
+      // Loading State
+      <div className="bg-gray-50 p-6 rounded-lg border-2 border-dashed border-gray-300 text-center">
+        <LoaderIcon className="w-8 h-8 mx-auto mb-3 animate-spin text-primary-navy" />
+        <p className="text-gray-600">AI is crafting professional content for you...</p>
+      </div>
+    ) : (
+      // Suggestions List
+      <div className="space-y-3">
+        {suggestions.map((suggestion, index) => (
+          <div
+            key={index}
+            className={cn(
+              "p-4 border-2 rounded-lg cursor-pointer transition-all duration-200",
+              selectedSuggestion === suggestion
+                ? "border-primary-navy bg-blue-50"
+                : "border-gray-200 hover:border-primary-navy/50 hover:bg-gray-50"
+            )}
+            onClick={() => setSelectedSuggestion(suggestion)}
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <p className="text-sm text-gray-700 leading-relaxed">
+                  {suggestion}
+                </p>
+              </div>
+              <div className="ml-3 flex-shrink-0">
+                {selectedSuggestion === suggestion ? (
+                  <div className="w-6 h-6 bg-primary-navy rounded-full flex items-center justify-center">
+                    <CheckIcon className="w-4 h-4 text-white" />
+                  </div>
+                ) : (
+                  <div className="w-6 h-6 border-2 border-gray-300 rounded-full"></div>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        
+        {/* Try Again Button */}
+        <div className="flex gap-3 pt-2">
+          <Button
+            variant="outline"
+            onClick={handleTryAgain}
+            className="flex-1 border-gray-300 text-gray-700 hover:bg-gray-50"
+          >
+            <RefreshCwIcon className="w-4 h-4 mr-2" />
+            Try Different Suggestions
+          </Button>
+        </div>
+      </div>
+    )}
+  </div>
+)}
+```
+
+## 9. APPLY SECTION STYLING
+
+```jsx
+{selectedSuggestion && (
+  <div className="space-y-3">
+    <div className="flex items-center gap-2">
+      <div className="w-6 h-6 bg-purple-600 text-white rounded-full flex items-center justify-center text-sm font-bold">3</div>
+      <Label className="text-base font-medium">Apply to your form</Label>
+    </div>
+    
+    <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+      <p className="text-sm text-purple-700 mb-3">
+        <strong>✨ Ready to apply:</strong> Your refined content will be added to the form field.
+      </p>
+      <div className="flex gap-3">
+        <Button
+          onClick={handleApply}
+          className="bg-purple-600 hover:bg-purple-700 text-white"
+        >
+          <CheckIcon className="w-4 h-4 mr-2" />
+          Apply This Content
+        </Button>
+        <Button
+          variant="outline"
+          onClick={onClose}
+          className="border-gray-300 text-gray-700"
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  </div>
+)}
+```
+
+## 10. KEY STYLING PATTERNS
+
+### Color Scheme:
+- Primary Navy: #1e3a8a (main actions, selected states)
+- Blue tones: #3b82f6, #60a5fa (accents, hover states)
+- Green: #16a34a (step 2 indicator)
+- Purple: #9333ea (step 3 indicator)
+- Gray scale: #f3f4f6, #e5e7eb, #6b7280 (backgrounds, borders, text)
+
+### Border Radius:
+- Buttons: rounded-xl (12px)
+- Cards/Containers: rounded-lg (8px)
+- Circles: rounded-full
+
+### Spacing:
+- Container padding: p-4, p-6
+- Gap between elements: gap-2, gap-3
+- Vertical spacing: space-y-3, space-y-6
+
+### Transitions:
+- All interactive elements: transition-all duration-200
+- Hover effects on buttons and cards
+- Loading spinners: animate-spin
+
+### Typography:
+- Titles: text-xl, font-medium
+- Labels: text-base, font-medium
+- Body text: text-sm
+- Tips/hints: text-xs
+- Colors: text-gray-700, text-blue-700, text-purple-700
+
+### Interactive States:
+- Hover: hover:bg-primary-navy hover:text-white
+- Focus: focus:border-primary-navy focus:ring-2 focus:ring-primary-navy/20
+- Disabled: opacity changes, gray colors
+- Selected: border-primary-navy bg-blue-50
+
+## 11. COMPONENT STRUCTURE
+
+```
+AI Magic Pen Container
+├── AI Button (trigger)
+└── Dialog Modal
+    ├── Header (title + description)
+    └── Content Area
+        ├── Step 1: User Input
+        │   ├── Step indicator
+        │   ├── Tip box (blue theme)
+        │   ├── Textarea
+        │   └── Action buttons
+        ├── Step 2: AI Suggestions (conditional)
+        │   ├── Step indicator  
+        │   ├── Loading state OR
+        │   └── Suggestion cards + Try Again
+        └── Step 3: Apply (conditional)
+            ├── Step indicator
+            └── Apply confirmation (purple theme)
+```
+
+## 12. RESPONSIVE CONSIDERATIONS
+
+- Dialog: max-w-2xl max-h-[90vh] overflow-y-auto
+- Buttons: flex-1 for equal width distribution
+- Text: leading-relaxed for better readability
+- Icons: consistent sizing (w-4 h-4 for buttons, w-6 h-6 for headers)
+
+## 13. ACCESSIBILITY FEATURES
+
+- Proper focus states with ring utilities
+- Semantic HTML structure
+- Keyboard shortcuts (Ctrl+Enter to submit)
+- Loading states with descriptive text
+- Clear visual hierarchy with step indicators
+
+This styling guide provides everything needed to recreate the AI Magic Pen component with identical visual design and user experience. 
